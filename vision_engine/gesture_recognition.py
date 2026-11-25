@@ -14,6 +14,9 @@ class GestureRecognition:
                 "gesture": "UNKNOWN",
                 "confidence": 0.0,
                 "extended_fingers": 0,
+                "pinch_ratio": 1.0,
+                "palm_scale": 0.0,
+                "pinch_distance": 0.0,
             }
 
         landmarks = [

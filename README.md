@@ -41,18 +41,27 @@
 ```
 AirTouch-Virtual-Desktop/
 ├── docs/
-│   └── images/                       # Project showcase & architecture visuals
+│   ├── images/                       # Project showcase & architecture visuals
+│   ├── LIVE_CAMERA_VALIDATION.md     # Real-world test scenarios & dock audit
+│   └── PERFORMANCE_REPORT.md         # Engineering audit & latency measurements
 ├── models/
 │   └── hand_landmarker.task          # MediaPipe Hand Landmarker task model
+├── results/
+│   └── benchmark/                    # Reproducible benchmark CSV outputs
 ├── tests/
 │   ├── test_gesture_integration.py   # Gesture state-machine integration tests
-│   └── test_virtual_interface.py     # Classifier, dock UI, and command tests
+│   ├── test_pinch_calibrator.py      # Hysteresis, cooldown, and calibration tests
+│   └── test_virtual_interface.py     # Classifier, dock UI, diagnostic, and benchmark tests
+├── tools/
+│   ├── benchmark.py                  # Latency & FPS benchmark suite (CSV logging)
+│   └── live_camera_diagnostic.py     # Live webcam Telemetry HUD & event logger
 ├── vision_engine/
 │   ├── __init__.py
-│   ├── gesture_classifier.py         # Rule-based finger state & gesture classifier
+│   ├── gesture_classifier.py         # Scale-invariant finger & gesture classifier
 │   ├── gesture_command_controller.py # Gesture sequence state machine
 │   ├── gesture_recognition.py        # Landmark adapter
 │   ├── hand_tracker.py               # MediaPipe video landmarker pipeline
+│   ├── pinch_calibrator.py           # Hysteresis-based PINCH calibrator
 │   └── virtual_interface.py          # Virtual Application Dock & glassmorphic HUD
 ├── main.py                           # Application entry point & webcam loop
 ├── windows_command_executor.py       # Win32 API & Windows application launcher

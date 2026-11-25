@@ -1,10 +1,16 @@
+import tempfile
 import unittest
 from unittest.mock import MagicMock
 import numpy as np
 
-from main import execute_windows_command, GESTURE_STABILIZATION
+from main import GestureStabilizer, GESTURE_STABILIZATION, execute_windows_command
+from tools.benchmark import compute_summary_metrics, percentile
+from tools.live_camera_diagnostic import DiagnosticPipeline
 from vision_engine.gesture_classifier import GestureClassifier
 from vision_engine.gesture_command_controller import GestureCommandController
+from vision_engine.gesture_recognition import GestureRecognition
+from vision_engine.hand_tracker import HandTracker
+from vision_engine.pinch_calibrator import PinchCalibrationConfig, PinchCalibrator
 from vision_engine.virtual_interface import CursorSmoother, VirtualAppDock
 
 
@@ -234,6 +240,86 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             execute_windows_command(mock_exec, "UNAUTHORIZED_COMMAND")
+
+    def test_hand_tracker_monotonic_timestamps_and_recognition_fallback(self):
+        tracker = HandTracker(model_path="models/hand_landmarker.task")
+        try:
+            blank = np.zeros((240, 320, 3), dtype=np.uint8)
+            # Equal timestamps must be clamped monotonically without raising ValueError
+            _, res1 = tracker.process(blank, 100)
+            _, res2 = tracker.process(blank, 100)
+            self.assertEqual(HandTracker.extract_handedness(res1), "N/A")
+            self.assertEqual(HandTracker.extract_handedness(res2), "N/A")
+        finally:
+            tracker.close()
+
+        rec = GestureRecognition().recognize(None)
+        self.assertEqual(rec["gesture"], "UNKNOWN")
+        self.assertIn("pinch_ratio", rec)
+        self.assertIn("pinch_distance", rec)
+        self.assertIn("palm_scale", rec)
+
+    def test_diagnostic_pipeline_hand_loss_and_event_log(self):
+        tracker = HandTracker(model_path="models/hand_landmarker.task")
+        try:
+            pipeline = DiagnosticPipeline(
+                tracker=tracker,
+                recognizer=GestureRecognition(),
+                stabilizer=GestureStabilizer(GESTURE_STABILIZATION),
+                controller=GestureCommandController(),
+                cursor_smoother=CursorSmoother(),
+                virtual_dock=VirtualAppDock(),
+                pinch_calibrator=PinchCalibrator(PinchCalibrationConfig()),
+                executor=None,
+                execute_os_commands=False,
+            )
+            blank = np.zeros((480, 640, 3), dtype=np.uint8)
+            annotated, telemetry = pipeline.process_frame(blank, now=1.0)
+            self.assertEqual(annotated.shape, blank.shape)
+            self.assertEqual(telemetry["tracking_status"], "LOST")
+            self.assertEqual(telemetry["raw_gesture"], "UNKNOWN")
+            self.assertIn("frame_time_ms", telemetry)
+            self.assertGreaterEqual(len(pipeline.event_log.events), 2)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                csv_path = pipeline.event_log.export_csv(f"{tmp}/events.csv")
+                self.assertTrue(csv_path.is_file())
+        finally:
+            tracker.close()
+
+    def test_benchmark_summary_metrics_and_percentile(self):
+        self.assertAlmostEqual(percentile([10.0, 20.0, 30.0, 40.0], 95), 38.5, places=2)
+        records = [
+            {
+                "capture_ms": 10.0,
+                "tracking_ms": 20.0,
+                "classification_ms": 0.5,
+                "end_to_end_ms": 31.0,
+                "instant_fps": 30.0,
+                "hands_count": 1,
+            },
+            {
+                "capture_ms": 12.0,
+                "tracking_ms": 22.0,
+                "classification_ms": 0.5,
+                "end_to_end_ms": 35.0,
+                "instant_fps": 28.0,
+                "hands_count": 0,
+            },
+        ]
+        summary = compute_summary_metrics(
+            mode="unit_test",
+            frame_records=records,
+            transition_latencies_ms=[40.0, 60.0],
+            pinch_calibrator=PinchCalibrator(),
+            pinch_attempts=2,
+            pinch_dock_successes=1,
+            resolution="640x480",
+            total_wall_seconds=0.1,
+        )
+        self.assertEqual(summary["hand_tracking_loss_rate_pct"], 50.0)
+        self.assertEqual(summary["avg_gesture_transition_latency_ms"], 50.0)
+        self.assertEqual(summary["successful_pinch_selection_rate_pct"], 50.0)
 
 
 if __name__ == "__main__":

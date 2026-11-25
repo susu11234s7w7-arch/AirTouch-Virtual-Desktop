@@ -24,8 +24,29 @@ class HandTracker:
         self.detector = vision.HandLandmarker.create_from_options(
             options
         )
+        self._last_timestamp_ms = -1
+
+    @staticmethod
+    def extract_handedness(result, hand_index=0):
+        """Return primary MediaPipe handedness label if available."""
+        handedness_list = getattr(result, "handedness", None)
+        if not handedness_list or hand_index >= len(handedness_list):
+            return "N/A"
+        hand_cats = handedness_list[hand_index]
+        if not hand_cats:
+            return "N/A"
+        category = hand_cats[0]
+        label = getattr(category, "category_name", None) or getattr(category, "display_name", "N/A")
+        score = getattr(category, "score", None)
+        if score is not None:
+            return f"{label} ({score:.2f})"
+        return str(label)
 
     def process(self, frame, timestamp_ms):
+        if timestamp_ms <= self._last_timestamp_ms:
+            timestamp_ms = self._last_timestamp_ms + 1
+        self._last_timestamp_ms = timestamp_ms
+
         rgb_frame = cv2.cvtColor(
             frame, cv2.COLOR_BGR2RGB
         )

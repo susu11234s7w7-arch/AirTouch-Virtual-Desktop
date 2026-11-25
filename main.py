@@ -238,7 +238,7 @@ def main():
                 stabilization["changed"]
                 and stable_gesture != last_controller_gesture
             ):
-                command_result = controller.process(stable_gesture)
+                command_result = controller.process(stable_gesture, now=now)
                 last_controller_gesture = stable_gesture
                 controller_message = command_result["message"]
 

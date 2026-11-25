@@ -1,0 +1,3 @@
+timestamp_utc,mode,resolution,frames,wall_seconds,average_fps,minimum_fps,maximum_fps,avg_capture_latency_ms,avg_hand_tracking_latency_ms,avg_classification_latency_ms,avg_frame_processing_time_ms,median_latency_ms,p95_latency_ms,hand_tracking_loss_rate_pct,avg_gesture_transition_latency_ms,false_activation_count,successful_pinch_selection_rate_pct,pinch_attempts,pinch_successes,enter_ratio,exit_ratio
+2026-11-25T23:20:14+00:00,synthetic,640x480_synthetic,64,3.051,20.98,18.23,23.31,0.0,22.092,0.272,24.992,23.657,31.19,12.5,56.928,2,100.0,2,2,0.3,0.42
+2026-11-25T23:20:27+00:00,webcam,1280x720,30,3.587,8.36,3.68,31.62,86.463,30.247,0.025,119.521,98.091,223.712,100.0,N/A,0,N/A,0,0,0.3,0.42

@@ -208,5 +208,6 @@ class GestureClassifier:
             "finger_angles": finger_angles,
             "thumb_angle": thumb_angle,
             "pinch_ratio": round(pinch_ratio, 3),
+            "pinch_distance": round(pinch_distance, 4),
             "palm_scale": round(palm_scale, 4),
         }
