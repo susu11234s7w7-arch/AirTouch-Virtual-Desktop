@@ -2,6 +2,16 @@
 
 **AirTouch Virtual Desktop** is a touchless human-computer interaction system that lets you control your Windows PC and launch applications through a **virtual air interface** using only your webcam and hand gestures. Built with **MediaPipe Hand Landmarker** and **OpenCV**, it combines real-time gesture recognition, adaptive stabilization, and an interactive on-screen **Virtual App Dock**.
 
+![AirTouch Virtual Desktop Showcase](docs/images/01_airtouch_virtual_dock.jpg)
+
+---
+
+## 📸 Architecture & Gesture Overview
+
+| Supported Gestures | System Pipeline |
+| :---: | :---: |
+| ![Supported Gestures](docs/images/02_supported_gestures.jpg) | ![System Pipeline](docs/images/03_system_pipeline.jpg) |
+
 ---
 
 ## 🚀 Key Features
@@ -29,6 +39,8 @@
 
 ```
 AirTouch-Virtual-Desktop/
+├── docs/
+│   └── images/                       # Project showcase & architecture visuals
 ├── models/
 │   └── hand_landmarker.task          # MediaPipe Hand Landmarker task model
 ├── tests/
