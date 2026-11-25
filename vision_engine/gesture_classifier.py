@@ -85,13 +85,13 @@ class GestureClassifier:
 
         finger_states["thumb"] = thumb_extended
 
-        four_folded = not any(finger_states[name] for name in fingers)
-        four_extended = all(finger_states[name] for name in fingers)
-
         index = finger_states["index"]
         middle = finger_states["middle"]
         ring = finger_states["ring"]
         pinky = finger_states["pinky"]
+
+        four_folded = not any(finger_states[name] for name in fingers)
+        four_extended = all(finger_states[name] for name in fingers)
 
         # Gesture classification
         if four_folded and thumb_raised and thumb_extended:

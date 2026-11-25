@@ -1,10 +1,11 @@
-import cv2
 import time
+import cv2
 
 from windows_command_executor import WindowsCommandExecutor
 from vision_engine.hand_tracker import HandTracker
 from vision_engine.gesture_recognition import GestureRecognition
 from vision_engine.gesture_command_controller import GestureCommandController
+from vision_engine.virtual_interface import VirtualAppDock
 
 
 # =========================================================
@@ -12,28 +13,37 @@ from vision_engine.gesture_command_controller import GestureCommandController
 # =========================================================
 
 MODEL_PATH = "models/hand_landmarker.task"
+
 CAMERA_INDEX = 0
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 
 SEQUENCE_TIMEOUT = 3.5
 
-# Each gesture has independent frame and time thresholds.
 GESTURE_STABILIZATION = {
     "OPEN_PALM": {"frames": 2, "seconds": 0.020},
-    "FIST":      {"frames": 2, "seconds": 0.020},
-    "PEACE":     {"frames": 2, "seconds": 0.020},
-    "UNKNOWN":   {"frames": 3, "seconds": 0.090},
+    "FIST": {"frames": 2, "seconds": 0.020},
+    "PEACE": {"frames": 2, "seconds": 0.020},
+    "POINTING": {"frames": 2, "seconds": 0.020},
+    "THUMBS_UP": {"frames": 2, "seconds": 0.020},
+    "UNKNOWN": {"frames": 3, "seconds": 0.090},
 }
 
-WINDOW_TITLE = "AI Vision Control Center - Live Commands"
+WINDOW_TITLE = "AirTouch Virtual Desktop - Hand Control Center"
 
+
+# =========================================================
+# WINDOWS COMMAND EXECUTOR
+# =========================================================
 
 def execute_windows_command(executor, command):
-    """Execute only explicitly approved Windows commands."""
+    """Execute only explicitly approved Windows desktop and app commands."""
     allowed_commands = {
         "MINIMIZE_ALL": executor.minimize_all,
         "OPEN_VSCODE": executor.open_vscode,
+        "OPEN_EXPLORER": executor.open_explorer,
+        "OPEN_CALCULATOR": executor.open_calculator,
+        "OPEN_NOTEPAD": executor.open_notepad,
     }
 
     action = allowed_commands.get(command)
@@ -42,6 +52,10 @@ def execute_windows_command(executor, command):
 
     return action()
 
+
+# =========================================================
+# GESTURE STABILIZER
+# =========================================================
 
 class GestureStabilizer:
     """Per-gesture debounce that ignores brief classification flicker."""
@@ -99,6 +113,22 @@ class GestureStabilizer:
         }
 
 
+def _safe_run_command(executor, command):
+    """Run an authorized Windows command and return status message."""
+    try:
+        execution_result = execute_windows_command(executor, command)
+        print(f"[EXECUTION RESULT] {execution_result}")
+        return str(execution_result)
+    except Exception as error:
+        message = f"Execution Error: {error}"
+        print(f"[EXECUTION ERROR] {error}")
+        return message
+
+
+# =========================================================
+# MAIN APPLICATION
+# =========================================================
+
 def main():
     tracker = None
     camera = None
@@ -107,11 +137,10 @@ def main():
         # 1. Initialize components
         tracker = HandTracker(model_path=MODEL_PATH)
         recognizer = GestureRecognition()
-        controller = GestureCommandController(
-            sequence_timeout=SEQUENCE_TIMEOUT
-        )
+        controller = GestureCommandController(sequence_timeout=SEQUENCE_TIMEOUT)
         executor = WindowsCommandExecutor()
         stabilizer = GestureStabilizer(GESTURE_STABILIZATION)
+        virtual_dock = VirtualAppDock(dwell_seconds=1.0, cooldown_seconds=1.8)
 
         # 2. Initialize camera
         camera = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
@@ -126,45 +155,45 @@ def main():
         start_time = time.perf_counter()
         frame_count = 0
         fps = 0.0
-
         raw_gesture = "UNKNOWN"
         stable_gesture = "UNKNOWN"
         confidence = 0.0
-
         controller_message = "ARMED - waiting for gesture"
         last_command_message = "No command executed"
         last_controller_gesture = None
+        stop_requested = False
 
+        # 4. Startup information
         print("=" * 64)
-        print("                 AI VISION CONTROL CENTER")
+        print("              AIRTOUCH VIRTUAL DESKTOP CENTER")
         print("=" * 64)
         print("Hand Tracking           : ACTIVE")
         print("Gesture Recognition     : ACTIVE")
-        print("Adaptive Stabilization : ACTIVE")
+        print("Virtual App Dock        : ACTIVE")
+        print("Adaptive Stabilization  : ACTIVE")
         print("Command Controller      : ACTIVE")
         print("Windows Executor        : ACTIVE")
         print("-" * 64)
-
         for gesture, settings in GESTURE_STABILIZATION.items():
             print(
-                f"{gesture:12} : {settings['frames']} frames / "
+                f"{gesture:16} : "
+                f"{settings['frames']} frames / "
                 f"{settings['seconds'] * 1000:.0f} ms"
             )
-
         print("-" * 64)
         print(f"Sequence Timeout        : {SEQUENCE_TIMEOUT:.1f}s")
         print("OPEN_PALM -> FIST       : MINIMIZE_ALL")
         print("PEACE                   : OPEN_VSCODE")
-        print("Confirmed UNKNOWN      : RE-ARM")
+        print("POINTING                : VIRTUAL APP DOCK CURSOR")
+        print("THUMBS_UP               : CONFIRM READY")
+        print("Confirmed UNKNOWN       : RE-ARM")
         print("-" * 64)
-        print("LIVE WINDOWS COMMANDS ENABLED")
         print("Press Q or ESC to exit.")
         print("=" * 64)
 
-        # 4. Main camera loop
+        # 5. Main camera loop
         while True:
             success, frame = camera.read()
-
             if not success:
                 print("[ERROR] Camera frame error.")
                 break
@@ -173,209 +202,101 @@ def main():
             now = time.perf_counter()
             timestamp_ms = int((now - start_time) * 1000)
 
-            # Hand tracking
-            annotated, result = tracker.process(
-                frame,
-                timestamp_ms
-            )
+            annotated, result = tracker.process(frame, timestamp_ms)
+            hands_count = len(result.hand_landmarks) if result.hand_landmarks else 0
 
-            hands_count = (
-                len(result.hand_landmarks)
-                if result.hand_landmarks
-                else 0
-            )
-
-            # FPS
             frame_count += 1
-
             if frame_count % 10 == 0:
                 elapsed_total = now - start_time
-
                 if elapsed_total > 0:
                     fps = frame_count / elapsed_total
 
-            # Raw gesture recognition
+            pointer_xy = None
             if hands_count > 0:
-                recognition = recognizer.recognize(
-                    result.hand_landmarks[0]
-                )
-
+                primary_hand = result.hand_landmarks[0]
+                recognition = recognizer.recognize(primary_hand)
                 raw_gesture = recognition["gesture"]
                 confidence = recognition["confidence"]
 
+                index_tip = primary_hand[8]
+                pointer_xy = (
+                    int(index_tip.x * frame.shape[1]),
+                    int(index_tip.y * frame.shape[0]),
+                )
             else:
                 raw_gesture = "UNKNOWN"
                 confidence = 0.0
 
-            # Adaptive stabilization
-            stabilization = stabilizer.update(
-                raw_gesture,
-                now
-            )
-
+            stabilization = stabilizer.update(raw_gesture, now)
             stable_gesture = stabilization["stable_gesture"]
 
-            # Process only stable state transitions.
             if (
                 stabilization["changed"]
                 and stable_gesture != last_controller_gesture
             ):
-                command_result = controller.process(
-                    stable_gesture
-                )
-
+                command_result = controller.process(stable_gesture)
                 last_controller_gesture = stable_gesture
                 controller_message = command_result["message"]
 
-                # Live Windows execution
                 if (
                     command_result["executed"]
                     and command_result["command"] is not None
                 ):
                     detected_command = command_result["command"]
-
-                    print(
-                        f"\n[COMMAND DETECTED] {detected_command}"
+                    print(f"\n[COMMAND DETECTED] {detected_command}")
+                    last_command_message = _safe_run_command(
+                        executor, detected_command
                     )
 
-                    try:
-                        execution_result = execute_windows_command(
-                            executor,
-                            detected_command
-                        )
-
-                        last_command_message = str(execution_result)
-
-                        print(
-                            f"[EXECUTION RESULT] {execution_result}"
-                        )
-
-                    except Exception as error:
-                        last_command_message = (
-                            f"Execution Error: {error}"
-                        )
-
-                        print(
-                            f"[EXECUTION ERROR] {error}"
-                        )
-
-            # Display
-            display_gesture = (
-                "NO HAND"
-                if stable_gesture == "UNKNOWN"
-                else stable_gesture
+            is_pointing = stable_gesture == "POINTING"
+            dock_result = virtual_dock.update(
+                pointer_xy=pointer_xy,
+                is_pointing=is_pointing,
+                frame_width=annotated.shape[1],
+                now=now,
             )
 
+            if dock_result["triggered"] and dock_result["command"]:
+                dock_command = dock_result["command"]
+                print(
+                    f"\n[VIRTUAL DOCK] {dock_result['label']} -> {dock_command}"
+                )
+                if dock_command == "EXIT_APP":
+                    last_command_message = "Exit requested from Virtual Dock"
+                    stop_requested = True
+                else:
+                    last_command_message = _safe_run_command(
+                        executor, dock_command
+                    )
+
+            display_gesture = (
+                "NO HAND" if stable_gesture == "UNKNOWN" else stable_gesture
+            )
             stability_text = (
                 f"{min(stabilization['candidate_count'], stabilization['required_frames'])}"
                 f"/{stabilization['required_frames']}"
             )
 
-            cv2.putText(
+            virtual_dock.draw(
                 annotated,
-                "AI VISION CONTROL CENTER",
-                (20, 35),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                f"Hands: {hands_count}",
-                (20, 75),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 255),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                f"Gesture: {display_gesture}",
-                (20, 115),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (255, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                f"Raw Gesture: {raw_gesture}",
-                (20, 155),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (255, 200, 0),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                f"Stability: {stability_text}",
-                (20, 195),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (255, 200, 0),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                f"Confidence: {confidence:.2f}",
-                (20, 235),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (255, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                f"FPS: {fps:.1f}",
-                (20, 275),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (255, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                f"Controller: {controller_message[:48]}",
-                (20, 315),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 200, 255),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                last_command_message[:65],
-                (20, 355),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                annotated,
-                "MODE: LIVE WINDOWS CONTROL",
-                (20, 395),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 165, 255),
-                2
+                pointer_xy=pointer_xy,
+                is_pointing=is_pointing,
+                hud_info={
+                    "hands_count": hands_count,
+                    "fps": fps,
+                    "display_gesture": display_gesture,
+                    "raw_gesture": raw_gesture,
+                    "stability_text": stability_text,
+                    "confidence": confidence,
+                    "controller_message": controller_message,
+                    "last_command_message": last_command_message,
+                },
             )
 
             cv2.imshow(WINDOW_TITLE, annotated)
 
             key = cv2.waitKey(1) & 0xFF
-
-            if key in (ord("q"), 27):
+            if key in (ord("q"), 27) or stop_requested:
                 break
 
     except Exception as error:
@@ -384,13 +305,10 @@ def main():
     finally:
         if camera is not None:
             camera.release()
-
         if tracker is not None:
             tracker.close()
-
         cv2.destroyAllWindows()
-
-        print("\nAI Vision Control Center stopped.")
+        print("\nAirTouch Virtual Desktop stopped.")
         print("Resources released.")
 
 

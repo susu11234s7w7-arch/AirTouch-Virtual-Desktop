@@ -1,13 +1,12 @@
-
 import ctypes
+import os
 import shutil
 import subprocess
-import os
 from pathlib import Path
 
 
 class WindowsCommandExecutor:
-    """Execute approved desktop commands on Windows."""
+    """Execute explicitly approved desktop and application commands on Windows."""
 
     def __init__(self):
         if os.name != "nt":
@@ -33,10 +32,8 @@ class WindowsCommandExecutor:
         candidates = [
             Path(os.environ.get("LOCALAPPDATA", ""))
             / "Programs/Microsoft VS Code/Code.exe",
-
             Path(os.environ.get("ProgramFiles", ""))
             / "Microsoft VS Code/Code.exe",
-
             Path(os.environ.get("ProgramFiles(x86)", ""))
             / "Microsoft VS Code/Code.exe",
         ]
@@ -47,6 +44,11 @@ class WindowsCommandExecutor:
 
         return shutil.which("code")
 
+    def _launch_system_app(self, executable, command_name):
+        """Launch a standard Windows executable via subprocess."""
+        subprocess.Popen([executable])
+        return f"{command_name} executed"
+
     def open_vscode(self):
         """Launch VS Code or display a missing-installation warning."""
         vscode_path = self.find_vscode()
@@ -54,15 +56,25 @@ class WindowsCommandExecutor:
         if not vscode_path:
             self.user32.MessageBoxW(
                 0,
-                "Visual Studio Code is not installed "
-                "or could not be found.",
-                "AI Vision Control Center",
-                0x30
+                "Visual Studio Code is not installed or could not be found.",
+                "AirTouch Virtual Desktop",
+                0x30,
             )
             return "VSCODE_NOT_FOUND"
 
-        subprocess.Popen([vscode_path])
-        return "OPEN_VSCODE executed"
+        return self._launch_system_app(vscode_path, "OPEN_VSCODE")
+
+    def open_explorer(self):
+        """Launch Windows File Explorer."""
+        return self._launch_system_app("explorer.exe", "OPEN_EXPLORER")
+
+    def open_calculator(self):
+        """Launch Windows Calculator."""
+        return self._launch_system_app("calc.exe", "OPEN_CALCULATOR")
+
+    def open_notepad(self):
+        """Launch Windows Notepad."""
+        return self._launch_system_app("notepad.exe", "OPEN_NOTEPAD")
 
 
 if __name__ == "__main__":
@@ -70,20 +82,24 @@ if __name__ == "__main__":
 
     executor = WindowsCommandExecutor()
 
+    cli_actions = {
+        "minimize": executor.minimize_all,
+        "vscode": executor.open_vscode,
+        "explorer": executor.open_explorer,
+        "calculator": executor.open_calculator,
+        "notepad": executor.open_notepad,
+    }
+
     if len(sys.argv) != 2:
         print("Usage:")
-        print("python windows_command_executor.py minimize")
-        print("python windows_command_executor.py vscode")
+        for key in cli_actions:
+            print(f"python windows_command_executor.py {key}")
         raise SystemExit(1)
 
     command = sys.argv[1].lower()
-
-    if command == "minimize":
-        print(executor.minimize_all())
-
-    elif command == "vscode":
-        print(executor.open_vscode())
-
-    else:
+    action = cli_actions.get(command)
+    if action is None:
         print(f"Unknown command: {command}")
         raise SystemExit(1)
+
+    print(action())

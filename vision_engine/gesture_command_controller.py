@@ -1,8 +1,10 @@
 
 import time
 
+
 class GestureCommandController:
-    def __init__(self, sequence_timeout=2.0):
+
+    def __init__(self, sequence_timeout=3.5):
         self.sequence_timeout = sequence_timeout
         self.reset()
 
@@ -13,6 +15,7 @@ class GestureCommandController:
         self.last_command = None
 
     def process(self, gesture, now=None):
+
         if not isinstance(gesture, str):
             raise TypeError("gesture must be a string")
 
@@ -38,39 +41,65 @@ class GestureCommandController:
             self.previous_gesture = gesture
             return result
 
+        # OPEN_PALM starts the minimize sequence.
         if gesture == "OPEN_PALM":
             if self.sequence_started_at is None:
                 self.sequence_started_at = now
                 result["message"] = "Sequence candidate"
+
             self.previous_gesture = gesture
             return result
 
+        # FIST completes OPEN_PALM -> FIST.
         if gesture == "FIST":
+
             if self.sequence_started_at is not None:
                 elapsed = now - self.sequence_started_at
+
                 if 0 <= elapsed <= self.sequence_timeout:
                     result["command"] = "MINIMIZE_ALL"
                     result["executed"] = True
                     result["message"] = "WIN + D requested"
+
                     self.armed = False
                     self.last_command = "MINIMIZE_ALL"
+
                 else:
                     result["message"] = "Sequence expired"
+
                 self.sequence_started_at = None
+
             self.previous_gesture = gesture
             return result
 
+        # Peace opens VS Code.
         if gesture == "PEACE":
             result["command"] = "OPEN_VSCODE"
             result["executed"] = True
             result["message"] = "VS Code launch requested"
+
             self.armed = False
             self.last_command = "OPEN_VSCODE"
             self.sequence_started_at = None
             self.previous_gesture = gesture
             return result
 
+        # Pointing drives the virtual cursor on the app dock.
+        if gesture == "POINTING":
+            self.sequence_started_at = None
+            self.previous_gesture = gesture
+            result["message"] = "Virtual pointer active"
+            return result
+
+        # Thumbs up confirms system readiness without altering state.
+        if gesture == "THUMBS_UP":
+            self.sequence_started_at = None
+            self.previous_gesture = gesture
+            result["message"] = "Confirmed - System Ready"
+            return result
+
         self.sequence_started_at = None
         self.previous_gesture = gesture
         result["message"] = "Gesture not assigned"
+
         return result

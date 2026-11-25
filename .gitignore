@@ -18,6 +18,9 @@ env/
 # Redundant root file (model is stored in models/hand_landmarker.task)
 /hand_landmarker.task
 
+# Downloaded datasets and archive files
+*.zip
+
 # Operating System files
 Thumbs.db
 ehthumbs.db
