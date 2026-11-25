@@ -5,7 +5,7 @@ from windows_command_executor import WindowsCommandExecutor
 from vision_engine.hand_tracker import HandTracker
 from vision_engine.gesture_recognition import GestureRecognition
 from vision_engine.gesture_command_controller import GestureCommandController
-from vision_engine.virtual_interface import VirtualAppDock
+from vision_engine.virtual_interface import CursorSmoother, VirtualAppDock
 
 
 # =========================================================
@@ -25,6 +25,7 @@ GESTURE_STABILIZATION = {
     "FIST": {"frames": 2, "seconds": 0.020},
     "PEACE": {"frames": 2, "seconds": 0.020},
     "POINTING": {"frames": 2, "seconds": 0.020},
+    "PINCH": {"frames": 2, "seconds": 0.015},
     "THUMBS_UP": {"frames": 2, "seconds": 0.020},
     "UNKNOWN": {"frames": 3, "seconds": 0.090},
 }
@@ -140,6 +141,7 @@ def main():
         controller = GestureCommandController(sequence_timeout=SEQUENCE_TIMEOUT)
         executor = WindowsCommandExecutor()
         stabilizer = GestureStabilizer(GESTURE_STABILIZATION)
+        cursor_smoother = CursorSmoother(alpha=0.38, deadzone_px=1.5)
         virtual_dock = VirtualAppDock(dwell_seconds=1.0, cooldown_seconds=1.8)
 
         # 2. Initialize camera
@@ -185,6 +187,7 @@ def main():
         print("OPEN_PALM -> FIST       : MINIMIZE_ALL")
         print("PEACE                   : OPEN_VSCODE")
         print("POINTING                : VIRTUAL APP DOCK CURSOR")
+        print("PINCH                   : INSTANT VIRTUAL DOCK CLICK")
         print("THUMBS_UP               : CONFIRM READY")
         print("Confirmed UNKNOWN       : RE-ARM")
         print("-" * 64)
@@ -211,7 +214,7 @@ def main():
                 if elapsed_total > 0:
                     fps = frame_count / elapsed_total
 
-            pointer_xy = None
+            raw_pointer_xy = None
             if hands_count > 0:
                 primary_hand = result.hand_landmarks[0]
                 recognition = recognizer.recognize(primary_hand)
@@ -219,7 +222,7 @@ def main():
                 confidence = recognition["confidence"]
 
                 index_tip = primary_hand[8]
-                pointer_xy = (
+                raw_pointer_xy = (
                     int(index_tip.x * frame.shape[1]),
                     int(index_tip.y * frame.shape[0]),
                 )
@@ -227,6 +230,7 @@ def main():
                 raw_gesture = "UNKNOWN"
                 confidence = 0.0
 
+            pointer_xy = cursor_smoother.update(raw_pointer_xy)
             stabilization = stabilizer.update(raw_gesture, now)
             stable_gesture = stabilization["stable_gesture"]
 
@@ -247,26 +251,44 @@ def main():
                     last_command_message = _safe_run_command(
                         executor, detected_command
                     )
+                    virtual_dock.show_toast(
+                        f"[GESTURE] {last_command_message}",
+                        color=(0, 220, 255),
+                        now=now,
+                    )
 
             is_pointing = stable_gesture == "POINTING"
+            is_pinching = stable_gesture == "PINCH"
             dock_result = virtual_dock.update(
                 pointer_xy=pointer_xy,
                 is_pointing=is_pointing,
                 frame_width=annotated.shape[1],
+                is_pinching=is_pinching,
                 now=now,
             )
 
             if dock_result["triggered"] and dock_result["command"]:
                 dock_command = dock_result["command"]
+                mode = dock_result["trigger_mode"] or "DOCK"
                 print(
-                    f"\n[VIRTUAL DOCK] {dock_result['label']} -> {dock_command}"
+                    f"\n[VIRTUAL DOCK - {mode}] {dock_result['label']} -> {dock_command}"
                 )
                 if dock_command == "EXIT_APP":
                     last_command_message = "Exit requested from Virtual Dock"
+                    virtual_dock.show_toast(
+                        f"[{mode}] Exiting AirTouch UI...",
+                        color=(90, 120, 255),
+                        now=now,
+                    )
                     stop_requested = True
                 else:
                     last_command_message = _safe_run_command(
                         executor, dock_command
+                    )
+                    virtual_dock.show_toast(
+                        f"[{mode}] {dock_result['label']} launched",
+                        color=(0, 235, 160),
+                        now=now,
                     )
 
             display_gesture = (
@@ -281,6 +303,7 @@ def main():
                 annotated,
                 pointer_xy=pointer_xy,
                 is_pointing=is_pointing,
+                is_pinching=is_pinching,
                 hud_info={
                     "hands_count": hands_count,
                     "fps": fps,
@@ -291,6 +314,7 @@ def main():
                     "controller_message": controller_message,
                     "last_command_message": last_command_message,
                 },
+                now=now,
             )
 
             cv2.imshow(WINDOW_TITLE, annotated)

@@ -91,6 +91,13 @@ class GestureCommandController:
             result["message"] = "Virtual pointer active"
             return result
 
+        # Pinch triggers virtual dock selection directly.
+        if gesture == "PINCH":
+            self.sequence_started_at = None
+            self.previous_gesture = gesture
+            result["message"] = "Pinch click active"
+            return result
+
         # Thumbs up confirms system readiness without altering state.
         if gesture == "THUMBS_UP":
             self.sequence_started_at = None

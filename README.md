@@ -16,22 +16,23 @@
 
 ## 🚀 Key Features
 
-- **Interactive Virtual Application Dock**: Use your index finger (`POINTING`) as an air cursor to hover over virtual buttons on screen (1.0s dwell-click) and launch Windows apps seamlessly:
+- **Interactive Virtual Application Dock**: Use your index finger (`POINTING`) with EMA cursor smoothing to hover over virtual buttons (1.0s dwell-click) or perform an instant **Pinch (`PINCH`)** click to launch Windows apps seamlessly:
   - 💻 **VS Code**
   - 📂 **File Explorer**
   - 🧮 **Calculator**
   - 📝 **Notepad**
   - 🖥️ **Show Desktop** (`Win + D`)
   - ❌ **Exit UI** (safely closes the AirTouch window)
-- **Real-Time Hand Tracking**: Uses Google MediaPipe Hand Landmarker with 21 3D hand landmarks.
+- **Scale-Invariant Computer Vision & Real Confidence Scoring**: Normalizes landmark distances relative to palm scale for distance-independent recognition, and computes bounded geometric confidence (`0.62–0.99`) from finger joint angles and pinch ratios.
 - **Clean Gesture Recognition**:
   - ✋ **Open Palm** (`OPEN_PALM`)
   - ✊ **Fist** (`FIST`)
   - ✌️ **Peace / Victory Sign** (`PEACE`)
-  - ☝️ **Index Pointing** (`POINTING`) — drives the virtual air cursor
+  - ☝️ **Index Pointing** (`POINTING`) — drives the smoothed virtual air cursor
+  - 🤏 **Pinch** (`PINCH`) — instant click on the Virtual App Dock
   - 👍 **Thumbs Up** (`THUMBS_UP`) — confirms system readiness
-- **Adaptive Gesture Stabilization**: Per-gesture frame and timing thresholds prevent jitter and accidental triggers.
-- **Glassmorphic HUD Overlay**: Displays real-time FPS, confidence score, stability progress, active controller state, and dwell progress rings.
+- **Adaptive Gesture Stabilization & EMA Smoothing**: Per-gesture frame/time debouncing plus Exponential Moving Average (`CursorSmoother`) filtering prevent jitter and accidental triggers.
+- **Glassmorphic HUD & Action Toast Banners**: Displays real-time FPS, confidence score, stability progress, active controller state, dwell progress rings, and live action confirmation banners.
 
 ---
 
@@ -107,6 +108,7 @@ python -m unittest tests/test_virtual_interface.py -v
 | `OPEN_PALM` ➡️ `FIST` | **Minimize All Windows** (Show Desktop) |
 | `PEACE` (armed) | **Launch Visual Studio Code** |
 | `POINTING` (1.0s dwell on Dock) | **Launch Selected App** (`VS Code`, `Explorer`, `Calculator`, `Notepad`, `Desktop`, `Exit UI`) |
+| `PINCH` (over Dock button) | **Instant Click Launch** on the hovered Virtual Dock app |
 | `THUMBS_UP` | **Confirm System Ready** |
 | `UNKNOWN` | **Re-arm Controller** for next gesture command |
 

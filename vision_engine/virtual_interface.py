@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 import time
 import cv2
 
@@ -23,6 +24,40 @@ DEFAULT_DOCK_BUTTONS = (
 )
 
 
+class CursorSmoother:
+    """Exponential moving average (EMA) filter with micro-jitter deadzone."""
+
+    def __init__(self, alpha=0.38, deadzone_px=1.5):
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("alpha must be in (0.0, 1.0]")
+        self.alpha = float(alpha)
+        self.deadzone_px = float(deadzone_px)
+        self._sx = None
+        self._sy = None
+
+    def reset(self):
+        self._sx = None
+        self._sy = None
+
+    def update(self, raw_xy):
+        """Return smoothed (x, y) tuple or None when tracking is lost."""
+        if raw_xy is None:
+            self.reset()
+            return None
+
+        rx, ry = float(raw_xy[0]), float(raw_xy[1])
+        if self._sx is None or self._sy is None:
+            self._sx, self._sy = rx, ry
+            return (int(round(self._sx)), int(round(self._sy)))
+
+        if math.hypot(rx - self._sx, ry - self._sy) < self.deadzone_px:
+            return (int(round(self._sx)), int(round(self._sy)))
+
+        self._sx = self.alpha * rx + (1.0 - self.alpha) * self._sx
+        self._sy = self.alpha * ry + (1.0 - self.alpha) * self._sy
+        return (int(round(self._sx)), int(round(self._sy)))
+
+
 def _draw_translucent_rect(frame, pt1, pt2, color, alpha=0.55):
     """Blend a filled rectangle onto the frame for a glassmorphic HUD effect."""
     x1, y1 = max(0, pt1[0]), max(0, pt1[1])
@@ -36,7 +71,7 @@ def _draw_translucent_rect(frame, pt1, pt2, color, alpha=0.55):
 
 
 class VirtualAppDock:
-    """Interactive air-touch virtual dock triggered by dwell pointing."""
+    """Interactive air-touch virtual dock supporting dwell and instant pinch clicks."""
 
     def __init__(
         self,
@@ -52,8 +87,20 @@ class VirtualAppDock:
         self.hover_started_at = None
         self.progress = 0.0
         self._fired_current_hover = False
+        self._pinch_consumed = False
         self.last_triggered_at = -1e9
         self.last_triggered_id = None
+
+        self.toast_message = None
+        self.toast_color = (0, 230, 160)
+        self.toast_until = 0.0
+
+    def show_toast(self, message, color=(0, 230, 160), duration=2.2, now=None):
+        """Display a temporary visual banner confirming a triggered command."""
+        now = time.monotonic() if now is None else now
+        self.toast_message = str(message)
+        self.toast_color = color
+        self.toast_until = now + float(duration)
 
     def compute_button_rects(self, frame_width):
         """Calculate responsive (x1, y1, x2, y2) boxes across the top dock bar."""
@@ -85,34 +132,35 @@ class VirtualAppDock:
         self.hover_started_at = None
         self.progress = 0.0
         self._fired_current_hover = False
+        self._pinch_consumed = False
 
-    def update(self, pointer_xy, is_pointing, frame_width, now=None):
-        """Update hover dwell progress and return trigger metadata."""
+    def _empty_result(self, label=None, cooling_down=False):
+        return {
+            "hovered_id": self.hovered_id,
+            "progress": self.progress,
+            "triggered": False,
+            "trigger_mode": None,
+            "command": None,
+            "label": label,
+            "cooling_down": cooling_down,
+        }
+
+    def update(self, pointer_xy, is_pointing, frame_width, is_pinching=False, now=None):
+        """Update hover dwell / instant pinch state and return trigger metadata."""
         now = time.monotonic() if now is None else now
         rects = self.compute_button_rects(frame_width)
 
-        if pointer_xy is None or not is_pointing:
+        if not is_pinching:
+            self._pinch_consumed = False
+
+        if pointer_xy is None or (not is_pointing and not is_pinching):
             self._reset_hover()
-            return {
-                "hovered_id": None,
-                "progress": 0.0,
-                "triggered": False,
-                "command": None,
-                "label": None,
-                "cooling_down": False,
-            }
+            return self._empty_result()
 
         target = self._hit_test(pointer_xy, rects)
         if target is None:
             self._reset_hover()
-            return {
-                "hovered_id": None,
-                "progress": 0.0,
-                "triggered": False,
-                "command": None,
-                "label": None,
-                "cooling_down": False,
-            }
+            return self._empty_result()
 
         in_cooldown = (now - self.last_triggered_at) < self.cooldown_seconds
 
@@ -121,52 +169,57 @@ class VirtualAppDock:
             self.hover_started_at = now
             self.progress = 0.0
             self._fired_current_hover = False
-            return {
-                "hovered_id": target.button_id,
-                "progress": 0.0,
-                "triggered": False,
-                "command": None,
-                "label": target.label,
-                "cooling_down": in_cooldown,
-            }
 
-        if in_cooldown or self._fired_current_hover:
-            return {
-                "hovered_id": target.button_id,
-                "progress": 1.0 if self._fired_current_hover else 0.0,
-                "triggered": False,
-                "command": None,
-                "label": target.label,
-                "cooling_down": in_cooldown,
-            }
-
-        elapsed = max(0.0, now - self.hover_started_at)
-        self.progress = min(1.0, elapsed / self.dwell_seconds)
-
-        if elapsed >= self.dwell_seconds:
+        if is_pinching and not self._pinch_consumed and not in_cooldown:
+            self.progress = 1.0
             self._fired_current_hover = True
+            self._pinch_consumed = True
             self.last_triggered_at = now
             self.last_triggered_id = target.button_id
             return {
                 "hovered_id": target.button_id,
                 "progress": 1.0,
                 "triggered": True,
+                "trigger_mode": "PINCH",
                 "command": target.command,
                 "label": target.label,
                 "cooling_down": False,
             }
 
-        return {
-            "hovered_id": target.button_id,
-            "progress": self.progress,
-            "triggered": False,
-            "command": None,
-            "label": target.label,
-            "cooling_down": False,
-        }
+        if in_cooldown or self._fired_current_hover:
+            return self._empty_result(label=target.label, cooling_down=in_cooldown)
 
-    def draw(self, frame, pointer_xy=None, is_pointing=False, hud_info=None):
-        """Render the virtual application dock, telemetry HUD, and air cursor."""
+        if is_pointing:
+            elapsed = max(0.0, now - self.hover_started_at)
+            self.progress = min(1.0, elapsed / self.dwell_seconds)
+
+            if elapsed >= self.dwell_seconds:
+                self._fired_current_hover = True
+                self.last_triggered_at = now
+                self.last_triggered_id = target.button_id
+                return {
+                    "hovered_id": target.button_id,
+                    "progress": 1.0,
+                    "triggered": True,
+                    "trigger_mode": "DWELL",
+                    "command": target.command,
+                    "label": target.label,
+                    "cooling_down": False,
+                }
+
+        return self._empty_result(label=target.label, cooling_down=False)
+
+    def draw(
+        self,
+        frame,
+        pointer_xy=None,
+        is_pointing=False,
+        is_pinching=False,
+        hud_info=None,
+        now=None,
+    ):
+        """Render the virtual application dock, telemetry HUD, toast, and air cursor."""
+        now = time.monotonic() if now is None else now
         height, width = frame.shape[:2]
         rects = self.compute_button_rects(width)
 
@@ -174,7 +227,7 @@ class VirtualAppDock:
         _draw_translucent_rect(frame, (12, 8), (width - 12, 110), (18, 22, 30), alpha=0.68)
         cv2.putText(
             frame,
-            "AIRTOUCH VIRTUAL APP DOCK  |  Point index finger on any app (1.0s) to launch",
+            "AIRTOUCH VIRTUAL APP DOCK  |  Point (1.0s) or PINCH to launch instantly",
             (22, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -190,12 +243,10 @@ class VirtualAppDock:
             bg_color = (42, 52, 70) if is_hovered else (28, 34, 46)
             _draw_translucent_rect(frame, (x1, y1), (x2, y2), bg_color, alpha=0.78)
 
-            # Dwell fill bar across button
             if is_hovered and self.progress > 0.0:
                 fill_x2 = x1 + int((x2 - x1) * self.progress)
                 _draw_translucent_rect(frame, (x1, y1), (fill_x2, y2), btn.accent, alpha=0.42)
 
-            # Accent strip + border
             border_color = btn.accent if is_hovered else (90, 105, 130)
             border_thickness = 2 if is_hovered else 1
             cv2.rectangle(frame, (x1, y1), (x2, y2), border_color, border_thickness)
@@ -215,9 +266,30 @@ class VirtualAppDock:
                 cv2.LINE_AA,
             )
 
-        # 2. Left Telemetry HUD Panel
+        # 2. Action Toast Banner (centered below dock)
+        if self.toast_message and now < self.toast_until:
+            toast_size = cv2.getTextSize(
+                self.toast_message, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2
+            )[0]
+            pill_w = min(width - 40, toast_size[0] + 48)
+            tx1 = (width - pill_w) // 2
+            tx2 = tx1 + pill_w
+            _draw_translucent_rect(frame, (tx1, 120), (tx2, 160), (20, 28, 40), alpha=0.82)
+            cv2.rectangle(frame, (tx1, 120), (tx2, 160), self.toast_color, 2)
+            cv2.putText(
+                frame,
+                self.toast_message,
+                (tx1 + 22, 147),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.62,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+        # 3. Left Telemetry HUD Panel
         if hud_info:
-            panel_w = min(370, width - 24)
+            panel_w = min(375, width - 24)
             _draw_translucent_rect(frame, (12, 122), (12 + panel_w, 396), (18, 22, 30), alpha=0.65)
             cv2.rectangle(frame, (12, 122), (12 + panel_w, 396), (70, 95, 125), 1)
 
@@ -245,24 +317,27 @@ class VirtualAppDock:
                 )
                 y_cursor += 37
 
-        # 3. Bottom Gesture Guide Bar
+        # 4. Bottom Gesture Guide Bar
         guide_y1 = max(120, height - 42)
         _draw_translucent_rect(frame, (12, guide_y1), (width - 12, height - 10), (18, 22, 30), alpha=0.68)
         cv2.putText(
             frame,
-            "OPEN_PALM -> FIST: Minimize Desktop  |  PEACE: Open VS Code  |  POINTING: Virtual App Dock  |  THUMBS_UP: Confirm  |  Q/ESC: Exit",
-            (22, height - 20),
+            "OPEN_PALM -> FIST: Minimize Desktop  |  PEACE: VS Code  |  POINTING / PINCH: Virtual Dock  |  THUMBS_UP: Confirm  |  Q/ESC: Exit",
+            (20, height - 20),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.48,
+            0.46,
             (215, 225, 240),
             1,
             cv2.LINE_AA,
         )
 
-        # 4. Virtual Air Cursor at index fingertip
+        # 5. Virtual Air Cursor at smoothed index fingertip
         if pointer_xy is not None:
             px, py = int(pointer_xy[0]), int(pointer_xy[1])
-            if is_pointing:
+            if is_pinching:
+                cv2.circle(frame, (px, py), 13, (0, 255, 120), 3, cv2.LINE_AA)
+                cv2.circle(frame, (px, py), 6, (255, 255, 255), -1, cv2.LINE_AA)
+            elif is_pointing:
                 cv2.circle(frame, (px, py), 10, (0, 255, 255), 2, cv2.LINE_AA)
                 cv2.circle(frame, (px, py), 4, (0, 255, 180), -1, cv2.LINE_AA)
                 if self.progress > 0.0:
