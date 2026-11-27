@@ -144,12 +144,14 @@ class TestDesktopInteractionStateMachine(unittest.TestCase):
 
     def test_peace_never_launches_an_app(self):
         self.machine.process_frame("OPEN_PALM", now=1.0)
+        pointing = self._point(self.machine, "vscode", 1.8)
         peace = self.machine.process_frame(
             "PEACE", self._pointer_for(self.machine, "vscode"), now=2.0
         )
         self.assertIsNone(peace["selected_app"])
         self.assertEqual(peace["actions"], [])
-        self.assertEqual(peace["mode"], InteractionMode.LAUNCHER_VISIBLE.value)
+        self.assertEqual(peace["mode"], InteractionMode.APP_HOVER.value)
+        self.assertEqual(peace["cursor_xy"], pointing["cursor_xy"])
 
     def test_unknown_and_tracking_loss_cancel_hover_without_launch(self):
         self.machine.process_frame("OPEN_PALM", now=1.0)

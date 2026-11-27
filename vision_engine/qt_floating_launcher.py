@@ -87,7 +87,7 @@ class FloatingLauncherWindow(QWidget):
         self.exit_rect = QRect(max(12, self.screen_width - 112), 22, 96, 36)
         self.hovered_tile = None
         self.dwell_ready = False
-        self.status = "Point at an app, then pinch to click"
+        self.status = "Point with index; raise and lower middle finger to click"
         self._icons = self._load_native_icons()
         self._build_window_region()
 

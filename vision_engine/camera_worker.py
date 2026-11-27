@@ -13,6 +13,7 @@ from vision_engine.hand_tracker import HandTracker
 from vision_engine.pinch_calibrator import PinchCalibrationConfig, PinchCalibrator
 from vision_engine.gesture_stabilizer import GESTURE_STABILIZATION, GestureStabilizer
 from vision_engine.hand_orientation import HandOrientationDetector
+from vision_engine.middle_finger_click import MiddleFingerClickDetector
 
 
 class CameraWorker(QThread):
@@ -56,6 +57,7 @@ class CameraWorker(QThread):
             self.logEvent.emit("HAND_TRACKER", "MediaPipe VIDEO task ready")
             recognizer = GestureRecognition()
             orientation_detector = HandOrientationDetector()
+            middle_click_detector = MiddleFingerClickDetector()
             stabilizer = GestureStabilizer(GESTURE_STABILIZATION)
             pinch_config = (
                 PinchCalibrationConfig.load(self.pinch_config_path)
@@ -102,6 +104,8 @@ class CameraWorker(QThread):
                 pinch_active = False
                 pinch_clicked = False
                 pinch_ratio = None
+                middle_click_triggered = False
+                middle_press_active = False
 
                 if tracking:
                     hand = hands[0]
@@ -111,6 +115,18 @@ class CameraWorker(QThread):
                         hand, raw_gesture
                     )
                     finger_states = recognition.get("finger_states", {})
+                    middle_click = middle_click_detector.update(
+                        finger_states,
+                        tracking_available=True,
+                        now=now,
+                    )
+                    middle_click_triggered = middle_click["click_triggered"]
+                    middle_press_active = middle_click["press_active"]
+                    if middle_click_triggered:
+                        self.logEvent.emit(
+                            "MIDDLE_FINGER_TAP",
+                            "index cursor click; middle finger raised then lowered",
+                        )
                     other_open = any(
                         finger_states.get(name, False)
                         for name in ("middle", "ring", "pinky")
@@ -149,6 +165,9 @@ class CameraWorker(QThread):
                         pinch_pending = False
                 else:
                     recognizer.recognize(None)
+                    middle_click_detector.update(
+                        None, tracking_available=False, now=now
+                    )
                     pinch_result = pinch_calibrator.update(None, now=now)
                     pinch_pending = False
                     raw_gesture = "UNKNOWN"
@@ -180,6 +199,8 @@ class CameraWorker(QThread):
                         "pinch_active": pinch_active,
                         "pinch_triggered": pinch_clicked,
                         "pinch_ratio": pinch_ratio,
+                        "middle_click_triggered": middle_click_triggered,
+                        "middle_press_active": middle_press_active,
                         "elapsed": now - started,
                     }
                 )

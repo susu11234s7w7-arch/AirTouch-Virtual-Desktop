@@ -143,6 +143,7 @@ class AirTouchController(QObject):
         self.last_tracking = None
         self.last_hover = None
         self.last_stable_gesture = None
+        self.last_middle_press_active = False
         self.is_shutting_down = False
 
         self.launcher.appSelected.connect(self._on_mouse_selection)
@@ -219,6 +220,14 @@ class AirTouchController(QObject):
             self.last_stable_gesture = stable
             self.log.record("STABLE_GESTURE", stable)
 
+        middle_press_active = bool(frame.get("middle_press_active", False))
+        if middle_press_active != self.last_middle_press_active:
+            self.last_middle_press_active = middle_press_active
+            self.log.record(
+                "MIDDLE_PRESS_STATE",
+                "RAISED" if middle_press_active else "LOWERED",
+            )
+
         result = self.state_machine.process_frame(
             stable,
             pointer_norm=frame["pointer_norm"],
@@ -229,15 +238,19 @@ class AirTouchController(QObject):
             self.log.record("STATE_TRANSITION", f"{self.last_mode.value} -> {result['mode']}")
             self.last_mode = self.state_machine.mode
 
-        if frame["pinch_triggered"]:
+        click_sources = []
+        if frame.get("middle_click_triggered", False):
+            click_sources.append("MIDDLE_FINGER_TAP")
+        if frame.get("pinch_triggered", False):
+            click_sources.append("CALIBRATED_PINCH")
+        if click_sources:
             click_mode = self.state_machine.mode in (
                 InteractionMode.DESKTOP_MODE,
                 InteractionMode.LAUNCHER_VISIBLE,
                 InteractionMode.APP_HOVER,
             )
             click_allowed = (
-                stable == "PINCH"
-                and tracking
+                tracking
                 and click_mode
                 and result["cursor_xy"] is not None
             )
@@ -250,15 +263,19 @@ class AirTouchController(QObject):
                 sent = left_click()
                 self.log.record(
                     "AIR_MOUSE_CLICK",
-                    f"sent={sent}; x={point[0]}; y={point[1]}; "
-                    f"hovered={result['hovered_app']}; ratio={frame['pinch_ratio']}",
+                    f"sources={'+'.join(click_sources)}; sent={sent}; "
+                    f"x={point[0]}; y={point[1]}; "
+                    f"hovered={result['hovered_app']}; "
+                    f"pinch_ratio={frame.get('pinch_ratio')}",
                 )
             else:
                 self.log.record(
                     "AIR_MOUSE_CLICK_BLOCKED",
-                    f"stable={stable}; tracking={tracking}; "
+                    f"sources={'+'.join(click_sources)}; stable={stable}; "
+                    f"tracking={tracking}; "
                     f"mode={self.state_machine.mode.value}; "
-                    f"cursor={result['cursor_xy']}; ratio={frame['pinch_ratio']}",
+                    f"cursor={result['cursor_xy']}; "
+                    f"pinch_ratio={frame.get('pinch_ratio')}",
                 )
 
         if result["hovered_app"] != self.last_hover:
@@ -267,7 +284,7 @@ class AirTouchController(QObject):
 
         self.launcher.set_air_state(result["hovered_app"], result["dwell_ready"])
         cursor_active = (
-            stable in ("POINTING", "PINCH")
+            stable in ("POINTING", "PINCH", "PEACE")
             and tracking
             and self.state_machine.mode in (
                 InteractionMode.DESKTOP_MODE,
@@ -294,12 +311,14 @@ class AirTouchController(QObject):
             self.launcher.set_status(f"Opening {app.label}...")
         elif result["dwell_ready"]:
             label = self.state_machine.apps[result["hovered_app"]].label
-            self.launcher.set_status(f"{label} highlighted — pinch to click")
+            self.launcher.set_status(f"{label} highlighted — lower middle finger to click")
         elif result["hovered_app"] is not None:
             label = self.state_machine.apps[result["hovered_app"]].label
-            self.launcher.set_status(f"{label} — pinch to click")
+            self.launcher.set_status(f"{label} — raise, then lower middle finger to click")
         elif result["hovered_app"] is None:
-            self.launcher.set_status("Point at an app, then pinch to click")
+            self.launcher.set_status(
+                "Point at an app, then raise and lower middle finger to click"
+            )
 
         self._apply_actions(result["actions"], result["selected_app"])
 
@@ -307,7 +326,9 @@ class AirTouchController(QObject):
         for action in actions:
             if action == "SHOW_LAUNCHER":
                 self.air_cursor.hide_cursor()
-                self.launcher.set_status("Point at an app, then pinch to click")
+                self.launcher.set_status(
+                    "Point at an app, then raise and lower middle finger to click"
+                )
                 self.launcher.show_animated()
                 self.log.record("OVERLAY", "visible; topmost translucent Qt launcher")
             elif action == "HIDE_LAUNCHER":

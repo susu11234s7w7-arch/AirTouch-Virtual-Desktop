@@ -214,7 +214,12 @@ class DesktopInteractionStateMachine:
             # Keep the last pointed coordinate so that click lands there.
             return self._result(actions, selected)
 
-        # PEACE, UNKNOWN, and all unassigned gestures are safe no-ops.
+        if gesture == "PEACE":
+            # PEACE by itself is a no-op. Retain the index position so the
+            # middle-finger lift/lower click can land on the pointed target.
+            return self._result(actions, selected)
+
+        # UNKNOWN and all unassigned gestures clear stale pointer coordinates.
         self._clear_pointer()
         if self.mode == InteractionMode.APP_HOVER:
             self.mode = InteractionMode.LAUNCHER_VISIBLE
