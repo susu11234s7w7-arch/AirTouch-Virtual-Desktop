@@ -121,6 +121,53 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
                 "FIST",
             )
 
+    def test_pointing_and_peace_use_middle_finger_geometry_not_thumb(self):
+        classifier = GestureClassifier()
+        pointing = _make_landmarks(index_up=True)
+        # Thumb-index contact must not override the required pointing pose.
+        pointing[4] = dict(pointing[8])
+        point_result = classifier.classify(pointing)
+        self.assertEqual(point_result["gesture"], "POINTING")
+        self.assertTrue(point_result["finger_states"]["index"])
+        self.assertFalse(point_result["finger_states"]["middle"])
+
+        peace = _make_landmarks(index_up=True, middle_up=True)
+        peace_result = classifier.classify(peace)
+        self.assertEqual(peace_result["gesture"], "PEACE")
+        self.assertTrue(peace_result["finger_states"]["middle"])
+        self.assertGreater(
+            peace_result["finger_geometry"]["middle"]["extension_score"],
+            point_result["finger_geometry"]["middle"]["extension_score"],
+        )
+
+    def test_middle_extension_hysteresis_suppresses_boundary_flips(self):
+        classifier = GestureClassifier()
+        self.assertTrue(
+            classifier._update_finger_states(
+                {"middle": {"extension_score": 0.86}}
+            )["middle"]
+        )
+        self.assertTrue(
+            classifier._update_finger_states(
+                {"middle": {"extension_score": 0.55}}
+            )["middle"]
+        )
+        self.assertFalse(
+            classifier._update_finger_states(
+                {"middle": {"extension_score": 0.49}}
+            )["middle"]
+        )
+        self.assertFalse(
+            classifier._update_finger_states(
+                {"middle": {"extension_score": 0.60}}
+            )["middle"]
+        )
+        self.assertTrue(
+            classifier._update_finger_states(
+                {"middle": {"extension_score": 0.63}}
+            )["middle"]
+        )
+
     def test_controller_safe_gestures_and_pinch(self):
         controller = GestureCommandController()
 
@@ -147,7 +194,7 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
         self.assertIsNone(smoother.update(None))
         self.assertEqual(smoother.update((400, 300)), (400, 300))
 
-    def test_virtual_app_dock_dwell_and_instant_pinch(self):
+    def test_virtual_app_dock_dwell_and_ignores_pinch(self):
         dock = VirtualAppDock(dwell_seconds=1.0, cooldown_seconds=2.0)
         rects = dock.compute_button_rects(1280)
         x1, y1, x2, y2 = rects["vscode"]
@@ -170,7 +217,7 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
         r3 = dock.update(center, is_pointing=True, frame_width=1280, now=11.5)
         self.assertFalse(r3["triggered"])
 
-        # Instant PINCH flow after cooldown expires
+        # PINCH alone cannot launch. Pointing starts a fresh hover timer.
         ex1, ey1, ex2, ey2 = rects["explorer"]
         exp_center = ((ex1 + ex2) // 2, (ey1 + ey2) // 2)
         p1 = dock.update(
@@ -180,24 +227,46 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
             is_pinching=True,
             now=15.0,
         )
-        self.assertTrue(p1["triggered"])
-        self.assertEqual(p1["trigger_mode"], "PINCH")
-        self.assertEqual(p1["command"], "OPEN_EXPLORER")
+        self.assertFalse(p1["triggered"])
+        self.assertIsNone(p1["command"])
 
-        # Holding pinch continuously does not re-fire even after cooldown
         p2 = dock.update(
             exp_center,
-            is_pointing=False,
+            is_pointing=True,
             frame_width=1280,
-            is_pinching=True,
-            now=18.0,
+            now=15.1,
         )
         self.assertFalse(p2["triggered"])
+        p3 = dock.update(
+            exp_center,
+            is_pointing=True,
+            frame_width=1280,
+            is_pinching=True,
+            now=16.1,
+        )
+        self.assertFalse(p3["triggered"])
+
+        p4 = dock.update(
+            exp_center,
+            is_pointing=True,
+            frame_width=1280,
+            now=16.2,
+        )
+        self.assertFalse(p4["triggered"])
+        p5 = dock.update(
+            exp_center,
+            is_pointing=True,
+            frame_width=1280,
+            now=17.2,
+        )
+        self.assertTrue(p5["triggered"])
+        self.assertEqual(p5["trigger_mode"], "DWELL")
+        self.assertEqual(p5["command"], "OPEN_EXPLORER")
 
     def test_virtual_app_dock_renders_toast_and_cursor(self):
         dock = VirtualAppDock()
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-        dock.show_toast("[PINCH] VS Code launched", now=1.0)
+        dock.show_toast("VS Code hovered and launched", now=1.0)
         dock.update((100, 70), is_pointing=False, frame_width=1280, is_pinching=True, now=1.2)
         dock.draw(
             frame,
@@ -211,7 +280,7 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
                 "raw_gesture": "PINCH",
                 "stability_text": "2/2",
                 "confidence": 0.91,
-                "controller_message": "Pinch click active",
+                "controller_message": "Pointing cursor active",
                 "last_command_message": "OPEN_VSCODE executed",
             },
             now=1.5,
@@ -221,23 +290,25 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
     def test_execute_windows_command_whitelist(self):
         mock_exec = MagicMock()
         mock_exec.minimize_all.return_value = "MINIMIZE_ALL executed"
+        mock_exec.open_chrome.return_value = "OPEN_CHROME executed"
         mock_exec.open_vscode.return_value = "OPEN_VSCODE executed"
         mock_exec.open_explorer.return_value = "OPEN_EXPLORER executed"
+        mock_exec.open_edge.return_value = "OPEN_EDGE executed"
+        mock_exec.open_settings.return_value = "OPEN_SETTINGS executed"
         mock_exec.open_calculator.return_value = "OPEN_CALCULATOR executed"
         mock_exec.open_notepad.return_value = "OPEN_NOTEPAD executed"
 
-        self.assertEqual(
-            execute_windows_command(mock_exec, "OPEN_EXPLORER"),
-            "OPEN_EXPLORER executed",
-        )
-        self.assertEqual(
-            execute_windows_command(mock_exec, "OPEN_CALCULATOR"),
-            "OPEN_CALCULATOR executed",
-        )
-        self.assertEqual(
-            execute_windows_command(mock_exec, "OPEN_NOTEPAD"),
-            "OPEN_NOTEPAD executed",
-        )
+        for command, expected in (
+            ("MINIMIZE_ALL", "MINIMIZE_ALL executed"),
+            ("OPEN_CHROME", "OPEN_CHROME executed"),
+            ("OPEN_VSCODE", "OPEN_VSCODE executed"),
+            ("OPEN_EXPLORER", "OPEN_EXPLORER executed"),
+            ("OPEN_EDGE", "OPEN_EDGE executed"),
+            ("OPEN_SETTINGS", "OPEN_SETTINGS executed"),
+            ("OPEN_CALCULATOR", "OPEN_CALCULATOR executed"),
+            ("OPEN_NOTEPAD", "OPEN_NOTEPAD executed"),
+        ):
+            self.assertEqual(execute_windows_command(mock_exec, command), expected)
         with self.assertRaises(ValueError):
             execute_windows_command(mock_exec, "UNAUTHORIZED_COMMAND")
 
@@ -268,7 +339,6 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
                 stabilizer=GestureStabilizer(GESTURE_STABILIZATION),
                 controller=GestureCommandController(),
                 cursor_smoother=CursorSmoother(),
-                virtual_dock=VirtualAppDock(),
                 pinch_calibrator=PinchCalibrator(PinchCalibrationConfig()),
                 executor=None,
                 execute_os_commands=False,
@@ -319,7 +389,8 @@ class TestAirTouchVirtualDesktop(unittest.TestCase):
         )
         self.assertEqual(summary["hand_tracking_loss_rate_pct"], 50.0)
         self.assertEqual(summary["avg_gesture_transition_latency_ms"], 50.0)
-        self.assertEqual(summary["successful_pinch_selection_rate_pct"], 50.0)
+        self.assertEqual(summary["successful_pinch_selection_rate_pct"], "Disabled")
+        self.assertEqual(summary["pinch_successes"], 0)
 
 
 if __name__ == "__main__":

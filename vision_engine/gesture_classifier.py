@@ -7,9 +7,25 @@ class GestureClassifier:
 
     ANGLE_THRESHOLD = 145.0
     PINCH_RATIO_THRESHOLD = 0.36
+    FINGER_EXTENSION_ENTER = 0.62
+    FINGER_EXTENSION_EXIT = 0.50
+    INDEX_EXTENSION_ENTER = 0.55
+    INDEX_EXTENSION_EXIT = 0.40
+    FINGER_LANDMARKS = {
+        "index": (5, 6, 7, 8),
+        "middle": (9, 10, 11, 12),
+        "ring": (13, 14, 15, 16),
+        "pinky": (17, 18, 19, 20),
+    }
 
     def __init__(self):
-        pass
+        self.reset()
+
+    def reset(self):
+        """Clear temporal finger hysteresis after hand-tracking loss."""
+        self._finger_extension_states = {
+            name: False for name in self.FINGER_LANDMARKS
+        }
 
     def _angle(self, a, b, c):
         """Calculate the interior angle (degrees) at vertex b formed by a-b-c."""
@@ -45,6 +61,74 @@ class GestureClassifier:
         )
         return max(wrist_to_middle, palm_width, 1e-6)
 
+    def _finger_geometry(self, landmarks, palm_scale):
+        """Measure finger extension from both joints and scale-normalized reach."""
+        def clamp01(value):
+            return min(1.0, max(0.0, value))
+
+        geometry = {}
+        for name, (mcp_i, pip_i, dip_i, tip_i) in self.FINGER_LANDMARKS.items():
+            mcp, pip, dip, tip = (
+                landmarks[mcp_i],
+                landmarks[pip_i],
+                landmarks[dip_i],
+                landmarks[tip_i],
+            )
+            pip_angle = self._angle(mcp, pip, dip)
+            dip_angle = self._angle(pip, dip, tip)
+            segment_length = (
+                math.dist((mcp["x"], mcp["y"]), (pip["x"], pip["y"]))
+                + math.dist((pip["x"], pip["y"]), (dip["x"], dip["y"]))
+                + math.dist((dip["x"], dip["y"]), (tip["x"], tip["y"]))
+            )
+            reach = math.dist((mcp["x"], mcp["y"]), (tip["x"], tip["y"]))
+            straightness = reach / max(segment_length, 1e-6)
+            normalized_reach = reach / palm_scale
+
+            # A straight finger should be open at both joints, have nearly
+            # collinear landmarks, and extend a useful distance from its MCP.
+            joint_score = clamp01((min(pip_angle, dip_angle) - 115.0) / 55.0)
+            straightness_score = clamp01((straightness - 0.55) / 0.42)
+            reach_score = clamp01((normalized_reach - 0.65) / 0.75)
+            extension_score = (
+                0.45 * joint_score
+                + 0.35 * straightness_score
+                + 0.20 * reach_score
+            )
+            geometry[name] = {
+                "pip_angle": pip_angle,
+                "dip_angle": dip_angle,
+                "straightness": straightness,
+                "normalized_reach": normalized_reach,
+                "extension_score": extension_score,
+            }
+        return geometry
+
+    def _update_finger_states(self, finger_geometry):
+        """Apply per-finger score hysteresis to reduce one-frame label flips."""
+        states = {}
+        for name, metrics in finger_geometry.items():
+            enter_threshold = (
+                self.INDEX_EXTENSION_ENTER
+                if name == "index"
+                else self.FINGER_EXTENSION_ENTER
+            )
+            exit_threshold = (
+                self.INDEX_EXTENSION_EXIT
+                if name == "index"
+                else self.FINGER_EXTENSION_EXIT
+            )
+            was_extended = self._finger_extension_states[name]
+            score = metrics["extension_score"]
+            is_extended = (
+                score >= exit_threshold
+                if was_extended
+                else score >= enter_threshold
+            )
+            self._finger_extension_states[name] = is_extended
+            states[name] = is_extended
+        return states
+
     def _compute_confidence(self, gesture, finger_angles, expected_states, pinch_ratio):
         """Compute a bounded geometric confidence score in [0.60, 0.99]."""
         if gesture == "UNKNOWN":
@@ -77,6 +161,7 @@ class GestureClassifier:
             raise ValueError("A hand must contain exactly 21 landmarks")
 
         palm_scale = self._compute_palm_scale(landmarks)
+        finger_geometry = self._finger_geometry(landmarks, palm_scale)
 
         fingers = {
             "index": (5, 6, 7),
@@ -94,10 +179,7 @@ class GestureClassifier:
             for name, points in fingers.items()
         }
 
-        finger_states = {
-            name: angle > self.ANGLE_THRESHOLD
-            for name, angle in finger_angles.items()
-        }
+        finger_states = self._update_finger_states(finger_geometry)
 
         wrist = landmarks[0]
         thumb_mcp = landmarks[2]
@@ -154,23 +236,20 @@ class GestureClassifier:
             (middle or ring or pinky) or index_reaching_out
         )
 
-        # Gesture classification (order preserves specificity)
+        # Finger configurations define POINTING and PEACE independently of
+        # thumb position. Resolve these poses before the pinch detector.
         expected_states = {}
-        if is_pinching:
-            gesture = "PINCH"
-            expected_states = {"middle": middle, "ring": ring, "pinky": pinky}
-
-        elif four_folded and thumb_raised and thumb_extended:
+        if four_folded and thumb_raised and thumb_extended:
             gesture = "THUMBS_UP"
+            expected_states = {name: False for name in fingers}
+
+        elif four_folded and not thumb_extended:
+            gesture = "FIST"
             expected_states = {name: False for name in fingers}
 
         elif four_extended and thumb_extended:
             gesture = "OPEN_PALM"
             expected_states = {name: True for name in fingers}
-
-        elif four_folded and not thumb_extended:
-            gesture = "FIST"
-            expected_states = {name: False for name in fingers}
 
         elif index and middle and not ring and not pinky:
             gesture = "PEACE"
@@ -190,6 +269,10 @@ class GestureClassifier:
                 "pinky": False,
             }
 
+        elif is_pinching:
+            gesture = "PINCH"
+            expected_states = {"middle": middle, "ring": ring, "pinky": pinky}
+
         else:
             gesture = "UNKNOWN"
 
@@ -206,6 +289,7 @@ class GestureClassifier:
             "extended_fingers": sum(finger_states.values()),
             "finger_states": finger_states,
             "finger_angles": finger_angles,
+            "finger_geometry": finger_geometry,
             "thumb_angle": thumb_angle,
             "pinch_ratio": round(pinch_ratio, 3),
             "pinch_distance": round(pinch_distance, 4),

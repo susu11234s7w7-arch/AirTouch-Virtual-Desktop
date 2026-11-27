@@ -1,11 +1,19 @@
+"""One-shot gesture commands for the native desktop dock."""
 
 import time
 
 
 class GestureCommandController:
+    """Map stabilized hand gestures to safe desktop actions.
+
+    Overlay visibility commands are consumed by ``DesktopOverlayController``.
+    App selection is handled by the index-finger hover timer. Other gestures do
+    not directly launch applications.
+    """
 
     def __init__(self, sequence_timeout=3.5):
-        self.sequence_timeout = sequence_timeout
+        # Kept for compatibility with callers that still configure this value.
+        self.sequence_timeout = float(sequence_timeout)
         self.reset()
 
     def reset(self):
@@ -15,98 +23,50 @@ class GestureCommandController:
         self.last_command = None
 
     def process(self, gesture, now=None):
-
         if not isinstance(gesture, str):
             raise TypeError("gesture must be a string")
 
         gesture = gesture.strip().upper()
         now = time.monotonic() if now is None else now
-
         result = {
             "gesture": gesture,
             "command": None,
             "executed": False,
-            "message": "No action"
+            "message": "No action",
         }
 
         if gesture == "UNKNOWN":
             self.armed = True
-            self.sequence_started_at = None
-            self.previous_gesture = "UNKNOWN"
-            result["message"] = "Controller re-armed"
-            return result
-
-        if not self.armed:
-            result["message"] = "Waiting for neutral gesture"
             self.previous_gesture = gesture
+            self.sequence_started_at = None
+            result["message"] = "Safe neutral state - controller ready"
             return result
 
-        # OPEN_PALM starts the minimize sequence.
         if gesture == "OPEN_PALM":
-            if self.sequence_started_at is None:
-                self.sequence_started_at = now
-                result["message"] = "Sequence candidate"
-
-            self.previous_gesture = gesture
-            return result
-
-        # FIST completes OPEN_PALM -> FIST.
-        if gesture == "FIST":
-
-            if self.sequence_started_at is not None:
-                elapsed = now - self.sequence_started_at
-
-                if 0 <= elapsed <= self.sequence_timeout:
-                    result["command"] = "MINIMIZE_ALL"
-                    result["executed"] = True
-                    result["message"] = "WIN + D requested"
-
-                    self.armed = False
-                    self.last_command = "MINIMIZE_ALL"
-
-                else:
-                    result["message"] = "Sequence expired"
-
-                self.sequence_started_at = None
-
-            self.previous_gesture = gesture
-            return result
-
-        # Peace opens VS Code.
-        if gesture == "PEACE":
-            result["command"] = "OPEN_VSCODE"
-            result["executed"] = True
-            result["message"] = "VS Code launch requested"
-
-            self.armed = False
-            self.last_command = "OPEN_VSCODE"
-            self.sequence_started_at = None
-            self.previous_gesture = gesture
-            return result
-
-        # Pointing drives the virtual cursor on the app dock.
-        if gesture == "POINTING":
-            self.sequence_started_at = None
-            self.previous_gesture = gesture
-            result["message"] = "Virtual pointer active"
-            return result
-
-        # Pinch triggers virtual dock selection directly.
-        if gesture == "PINCH":
-            self.sequence_started_at = None
-            self.previous_gesture = gesture
-            result["message"] = "Pinch click active"
-            return result
-
-        # Thumbs up confirms system readiness without altering state.
-        if gesture == "THUMBS_UP":
-            self.sequence_started_at = None
-            self.previous_gesture = gesture
+            result.update(
+                command="SHOW_OVERLAY",
+                executed=True,
+                message="Desktop overlay shown",
+            )
+            self.last_command = "SHOW_OVERLAY"
+        elif gesture == "FIST":
+            result.update(
+                command="HIDE_OVERLAY",
+                executed=True,
+                message="Desktop overlay hidden",
+            )
+            self.last_command = "HIDE_OVERLAY"
+        elif gesture == "PEACE":
+            result["message"] = "Use POINTING to hover over an application"
+        elif gesture == "POINTING":
+            result["message"] = "Desktop air cursor active when overlay is visible"
+        elif gesture == "PINCH":
+            result["message"] = "PINCH does not activate desktop applications"
+        elif gesture == "THUMBS_UP":
             result["message"] = "Confirmed - System Ready"
-            return result
+        else:
+            result["message"] = "Gesture not assigned"
 
-        self.sequence_started_at = None
         self.previous_gesture = gesture
-        result["message"] = "Gesture not assigned"
-
+        self.sequence_started_at = None
         return result

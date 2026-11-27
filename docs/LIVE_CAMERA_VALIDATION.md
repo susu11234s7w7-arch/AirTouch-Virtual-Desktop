@@ -1,64 +1,32 @@
-# Live Camera Validation & Virtual Dock Verification
+# Live Camera and Floating Launcher Validation
 
-**Project:** AirTouch Virtual Desktop  
-**Validation Status:** **PENDING USER LIVE HAND TESTING**  
-*(Note: Automated checks confirmed webcam index `0` opens and delivers `1280x720` frames, and automated unit/integration/synthetic tests passed; however, human hand scenarios `T01`–`T11` have NOT been executed yet and require a live operator in front of the webcam.)*
+Automated tests cover the state machine, Qt overlay shape, pinch calibration, cursor mapping, and mocked app launchers. Real camera and desktop behavior must be checked on the target Windows desktop.
 
----
+## Run the application
 
-## 1. How to Run Live Validation Locally
+From the project root in PowerShell:
 
-### Step 1: Run Live Camera Diagnostic Mode
 ```powershell
-.\.venv\Scripts\python.exe tools\live_camera_diagnostic.py --no-os-exec
+.\.venv-overlay\Scripts\python.exe -m pip install -r .\requirements.txt
+.\.venv-overlay\Scripts\python.exe .\main.py
 ```
-- Perform each scenario below while observing the Telemetry HUD (`Raw Gesture` vs `Stable Gesture`, `FPS`, `Frame Time`, `Pinch Ratio`, `Tracking`, `Handedness`).
-- Optional empirical `PINCH` calibration during the session:
-  1. Hold hand open in `POINTING` / `OPEN_PALM` and press **`O`** at least **10 times**.
-  2. Hold `PINCH` clearly and press **`P`** at least **10 times**.
-  3. Press **`C`** to compute and save `results/benchmark/calibrated_pinch_config.json`.
-- Press **`Q`** or **`ESC`** to stop and save the timestamped CSV log in `results/benchmark/diagnostic_events_<timestamp>.csv`.
 
-### Step 2: Run Live Webcam Performance Benchmark (With Active Hand)
-```powershell
-.\.venv\Scripts\python.exe tools\benchmark.py --mode webcam --frames 300 --show
-```
-- Perform steady `POINTING`, `PINCH`, `OPEN_PALM -> FIST`, and `PEACE` gestures during the 300 frames.
-- Inspect the generated summary in `results/benchmark/benchmark_sessions.csv`.
+The initial Qt window is the mirrored camera preview. Camera capture and MediaPipe run on a dedicated worker and continue after the preview is hidden. The launcher is a separate transparent, frameless, always-on-top PySide6 window; it is not drawn into the camera image. Its window region covers the five app cards and Exit UI, while transparent gaps pass input to the desktop.
 
----
+## Gesture checks
 
-## 2. Real-World Test Scenarios Matrix (`T01`–`T11`)
+1. Confirm the camera preview appears and `results/airtouch_sessions/session_*.csv` records `CAMERA_INITIALIZED`.
+2. Hold `FIST`. Confirm the preview and launcher hide, the state becomes `DESKTOP_MODE`, and later tracking events continue. Confirm there is no `MINIMIZE_ALL`/Win+D event.
+3. Hold `OPEN_PALM`. Confirm the camera preview stays hidden and the translucent topmost app arc appears over the desktop.
+4. Use POINTING to hover each of the five app cards. Confirm cursor smoothing, hover highlighting, and the `APP_HOVER` state. Hold a tile for 500 ms; it should only become dwell-ready and must not auto-launch.
+5. While hovering a tile, PINCH or click its card. Confirm one launch request, a real Windows app window, overlay hide, and continued camera tracking.
+6. Keep PINCH held and verify it does not launch twice. Release and re-enter a tile to verify another deliberate selection is accepted after cooldown.
+7. Verify PEACE, UNKNOWN, and tracking loss do not launch anything; on loss the cursor and hover clear.
+8. Use **Exit UI** or the system-tray menu to stop the camera worker and close the Qt windows.
+9. Test Chrome, VS Code, Explorer, Edge, and Settings on the Windows installation. A missing app must be reported as `NOT TESTED` rather than counted as success.
 
-| Test ID | Scenario | Expected Result | Actual Result | Pass/Fail | Notes |
-|---|---|---|---|---|---|
-| **T01** | Strong lighting (bright front/overhead light) | Hand stays `TRACKED`; `OPEN_PALM`, `FIST`, `PEACE`, `POINTING`, `PINCH` classify accurately without flicker | `PENDING_USER_LIVE_RUN` | `PENDING` | Watch for overexposed skin washing out landmarks |
-| **T02** | Medium indoor lighting (normal room) | Stable recognition; `Dwell` (1.0s) and `PINCH` trigger reliably with hysteresis holding inside `[0.30, 0.42]` | `PENDING_USER_LIVE_RUN` | `PENDING` | Baseline reference lighting |
-| **T03** | Low lighting (dim room / backlit) | Degradation monitored via `Hand Tracking Loss Rate` and `Raw vs Stable` flicker count | `PENDING_USER_LIVE_RUN` | `PENDING` | Expected higher tracking loss or jitter |
-| **T04** | Hand close to camera (~30–40 cm) | `palm_scale` normalizes distances; `PINCH` and gestures maintain accuracy | `PENDING_USER_LIVE_RUN` | `PENDING` | Verify hand stays inside frame bounds |
-| **T05** | Hand far from camera (~90–120 cm) | `palm_scale` scales down thresholds; `PINCH` still triggers without requiring huge motion | `PENDING_USER_LIVE_RUN` | `PENDING` | Monitor tracking loss at small pixel size |
-| **T06** | Fast hand motion | `GestureStabilizer` suppresses transient misclassifications; no unintended Windows commands | `PENDING_USER_LIVE_RUN` | `PENDING` | Observe `Raw != Stable [STABILIZING]` indicator |
-| **T07** | Slow deliberate hand motion | `CursorSmoother` glides smoothly; `PINCH` and `Dwell` hit intended Virtual Dock tile accurately | `PENDING_USER_LIVE_RUN` | `PENDING` | Confirm deadzone suppresses micro-tremor |
-| **T08** | Hand loss & recovery (move hand out of frame then back) | `Tracking` switches to `LOST`, `PinchCalibrator` resets to `HAND_LOST`, `GestureController` re-arms on `UNKNOWN` | `PENDING_USER_LIVE_RUN` | `PENDING` | Verify no stale cursor jump on re-entry |
-| **T09** | Right hand operation | `Handedness` updates in HUD; all gestures & `PINCH` work consistently | `PENDING_USER_LIVE_RUN` | `PENDING` | Note horizontal flip mirrors MediaPipe Left/Right label |
-| **T10** | Left hand operation | `Handedness` updates in HUD; thumb extension & `PINCH` rules remain accurate | `PENDING_USER_LIVE_RUN` | `PENDING` | Verify symmetry of `thumb_tip_norm` rule |
-| **T11** | Two hands in frame simultaneously | `HandTracker` (`num_hands=2`) draws both hands; controller tracks `hand_landmarks[0]` without crash | `PENDING_USER_LIVE_RUN` | `PENDING` | Check if primary hand switching occurs when crossing |
+The saved empirical PINCH calibration file is loaded by the camera worker and is not changed at runtime. The legacy calibration utility remains available.
 
----
+## Diagnostic mode
 
-## 3. Phase F — `VirtualAppDock` Architectural Verification
-
-### Verified Finding
-Inspection of [main.py](../main.py) (`cv2.imshow(WINDOW_TITLE, annotated)`) and [vision_engine/virtual_interface.py](../vision_engine/virtual_interface.py) (`VirtualAppDock.draw`) confirms:
-
-1. **`VirtualAppDock` is drawn ONLY inside the OpenCV camera frame** (`annotated` BGR buffer).
-2. **It lives inside an OpenCV GUI window** (`"AirTouch Virtual Desktop - Hand Control Center"`), **NOT** as an independent Windows transparent desktop overlay (`WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST`).
-
-### Documented Architectural Implications
-- Because the dock is bound inside the OpenCV window:
-  - Launching any external Windows application (`VS Code`, `Explorer`, `Calculator`, `Notepad`) brings that new app window to the foreground, **covering the OpenCV camera window and hiding `VirtualAppDock`**.
-  - Triggering `MINIMIZE_ALL` (`Win + D`) **minimizes the OpenCV window itself**, requiring manual restoration to continue using the dock.
-  - Therefore, **AirTouch Virtual Desktop currently provides in-frame camera virtual dock control**, and **must NOT be described as a system-wide transparent desktop overlay**.
-
-### Proposed Future Architectural Solution (Deferred to Later Phase)
-- Separate the vision backend (headless webcam + MediaPipe worker thread) from a **transparent always-on-top Win32 / PySide6 layered overlay dock** pinned to the top edge of the Windows screen (`HWND_TOPMOST`), projecting normalized fingertip coordinates `(x, y)` from camera space to screen space so the dock remains visible and interactive above all running Windows applications.
+`tools/live_camera_diagnostic.py` is retained as a legacy telemetry utility; production interaction runs through `main.py` and the PySide6 worker/overlay path. `tools/benchmark.py` measures the vision path.

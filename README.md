@@ -1,127 +1,66 @@
-# 🖐️ AirTouch Virtual Desktop
+# AirTouch Virtual Desktop
 
-**AirTouch Virtual Desktop** is a touchless human-computer interaction system that lets you control your Windows PC and launch applications through a **virtual air interface** using only your webcam and hand gestures. Built with **MediaPipe Hand Landmarker** and **OpenCV**, it combines real-time gesture recognition, adaptive stabilization, and an interactive on-screen **Virtual App Dock**.
+AirTouch is a Windows hand-gesture controller built with OpenCV, MediaPipe, and PySide6. The camera worker keeps running while the camera preview and desktop launcher are shown or hidden.
 
-![AirTouch Virtual Desktop Showcase](docs/images/01_airtouch_virtual_dock.jpg)
+## Camera preview and desktop overlay
 
----
+- **Camera preview:** A separate Qt window shows the mirrored camera image and tracked hand landmarks during monitoring.
+- **Windows desktop launcher:** A separate PySide6 frameless, translucent, always-on-top overlay. It is not drawn into the preview. Its shaped window region accepts input only over the app cards and Exit UI control; transparent gaps pass input to desktop windows.
 
-## 📸 Architecture & Gesture Overview
+Camera capture and MediaPipe run on one dedicated worker thread that owns the camera. Qt windows and app-launch callbacks run independently. The existing empirical PINCH calibration file is loaded for selection; its saved thresholds are not replaced.
 
-| Supported Gestures | System Pipeline |
-| :---: | :---: |
-| ![Supported Gestures](docs/images/02_supported_gestures.jpg) | ![System Pipeline](docs/images/03_system_pipeline.jpg) |
+## Gesture controls
 
----
+| Gesture | Action |
+| --- | --- |
+| `OPEN_PALM` | Hide the preview and show the floating launcher |
+| `POINTING` | Move the smoothed air cursor and highlight any app tile |
+| Hover for 500 ms | Set the app-hover state; hovering alone does not launch |
+| `PINCH` | Select the hovered app using the saved empirical calibration |
+| Stable mouse click | Select the clicked app tile |
+| `FIST` | Hide the preview and launcher, then enter desktop mode; camera tracking continues without Win+D |
+| `PEACE` | No command |
+| `UNKNOWN` or tracking loss | Hide the air cursor, clear hover, and prevent selection |
+| Other gestures | Do not launch applications directly |
 
-## 🚀 Key Features
+The floating arc contains Google Chrome, Visual Studio Code, File Explorer, Microsoft Edge, and Windows Settings. A successful launch hides the launcher and leaves the camera worker active. Exit UI is available on the launcher and in the system tray.
 
-- **Interactive Virtual Application Dock**: Use your index finger (`POINTING`) with EMA cursor smoothing to hover over virtual buttons (1.0s dwell-click) or perform an instant **Pinch (`PINCH`)** click to launch Windows apps seamlessly:
-  - 💻 **VS Code**
-  - 📂 **File Explorer**
-  - 🧮 **Calculator**
-  - 📝 **Notepad**
-  - 🖥️ **Show Desktop** (`Win + D`)
-  - ❌ **Exit UI** (safely closes the AirTouch window)
-- **Scale-Invariant Computer Vision & Real Confidence Scoring**: Normalizes landmark distances relative to palm scale for distance-independent recognition, and computes bounded geometric confidence (`0.62–0.99`) from finger joint angles and pinch ratios.
-- **Clean Gesture Recognition**:
-  - ✋ **Open Palm** (`OPEN_PALM`)
-  - ✊ **Fist** (`FIST`)
-  - ✌️ **Peace / Victory Sign** (`PEACE`)
-  - ☝️ **Index Pointing** (`POINTING`) — drives the smoothed virtual air cursor
-  - 🤏 **Pinch** (`PINCH`) — instant click on the Virtual App Dock
-  - 👍 **Thumbs Up** (`THUMBS_UP`) — confirms system readiness
-- **Adaptive Gesture Stabilization & EMA Smoothing**: Per-gesture frame/time debouncing plus Exponential Moving Average (`CursorSmoother`) filtering prevent jitter and accidental triggers.
-- **Glassmorphic HUD & Action Toast Banners**: Displays real-time FPS, confidence score, stability progress, active controller state, dwell progress rings, and live action confirmation banners.
+## Install and run (PowerShell)
 
----
+From the project root:
 
-## 📁 Project Structure
-
-```
-AirTouch-Virtual-Desktop/
-├── docs/
-│   ├── images/                       # Project showcase & architecture visuals
-│   ├── LIVE_CAMERA_VALIDATION.md     # Real-world test scenarios & dock audit
-│   └── PERFORMANCE_REPORT.md         # Engineering audit & latency measurements
-├── models/
-│   └── hand_landmarker.task          # MediaPipe Hand Landmarker task model
-├── results/
-│   └── benchmark/                    # Reproducible benchmark CSV outputs
-├── tests/
-│   ├── test_gesture_integration.py   # Gesture state-machine integration tests
-│   ├── test_pinch_calibrator.py      # Hysteresis, cooldown, and calibration tests
-│   └── test_virtual_interface.py     # Classifier, dock UI, diagnostic, and benchmark tests
-├── tools/
-│   ├── benchmark.py                  # Latency & FPS benchmark suite (CSV logging)
-│   └── live_camera_diagnostic.py     # Live webcam Telemetry HUD & event logger
-├── vision_engine/
-│   ├── __init__.py
-│   ├── gesture_classifier.py         # Scale-invariant finger & gesture classifier
-│   ├── gesture_command_controller.py # Gesture sequence state machine
-│   ├── gesture_recognition.py        # Landmark adapter
-│   ├── hand_tracker.py               # MediaPipe video landmarker pipeline
-│   ├── pinch_calibrator.py           # Hysteresis-based PINCH calibrator
-│   └── virtual_interface.py          # Virtual Application Dock & glassmorphic HUD
-├── main.py                           # Application entry point & webcam loop
-├── windows_command_executor.py       # Win32 API & Windows application launcher
-├── requirements.txt                  # Project dependencies
-└── README.md
-```
-
----
-
-## 🛠️ Installation & Setup
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/susu11234s7w7-arch/AirTouch-Virtual-Desktop.git
-cd AirTouch-Virtual-Desktop
-```
-
-### 2. Create and Activate a Virtual Environment
 ```powershell
-# Windows (PowerShell)
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\.venv-overlay\Scripts\python.exe -m pip install -r .\requirements.txt
+.\.venv-overlay\Scripts\python.exe .\main.py
 ```
 
-### 3. Install Dependencies
-```bash
-pip install -r requirements.txt
+The initial window is the camera monitor. FIST hides it without stopping capture; OPEN_PALM displays the floating launcher. Use the **Exit UI** control or the system-tray menu to close the application safely.
+
+## Tests
+
+```powershell
+.\.venv-overlay\Scripts\python.exe -m unittest discover -s .\tests -v
 ```
 
----
+The state-machine and Qt-window tests run in the test suite. Real camera gestures, Windows focus changes, overlay appearance, and application launches still require live Windows validation.
 
-## 🎮 Running the Application
+## Project layout
 
-Start the virtual desktop controller:
-```bash
-python main.py
+```text
+vision_engine/
+  camera_worker.py               Single-owner camera/MediaPipe QThread worker
+  desktop_interaction.py          Desktop launcher state machine and cursor mapping
+  qt_floating_launcher.py         Translucent topmost app arc and camera preview
+  gesture_stabilizer.py           Debounce stable gesture events
+  desktop_overlay.py              Legacy Win32 overlay retained for compatibility
+  gesture_command_controller.py  Stable gesture to overlay action mapping
+  gesture_classifier.py          Scale-invariant hand gesture classifier
+  gesture_recognition.py         MediaPipe landmark adapter
+  hand_tracker.py                MediaPipe video pipeline
+  pinch_calibrator.py            Calibrated pinch hysteresis and cooldown
+  virtual_interface.py            Legacy in-frame renderer retained for unit tests
+main.py                           Qt application shell and desktop interaction wiring
+tools/live_camera_diagnostic.py   Legacy camera telemetry utility
+windows_command_executor.py       Existing Windows application launcher
+tests/                            Automated gesture, calibration, and overlay tests
 ```
-
-- Press **`q`**, **`ESC`**, or hover on **`Exit UI`** in the Virtual App Dock to exit.
-
-### Running Tests
-```bash
-python -m tests.test_gesture_integration
-python -m unittest tests/test_virtual_interface.py -v
-```
-
----
-
-## 📜 Supported Gestures & Virtual Controls
-
-| Gesture / Interaction | Action Triggered |
-|-----------------------|------------------|
-| `OPEN_PALM` ➡️ `FIST` | **Minimize All Windows** (Show Desktop) |
-| `PEACE` (armed) | **Launch Visual Studio Code** |
-| `POINTING` (1.0s dwell on Dock) | **Launch Selected App** (`VS Code`, `Explorer`, `Calculator`, `Notepad`, `Desktop`, `Exit UI`) |
-| `PINCH` (over Dock button) | **Instant Click Launch** on the hovered Virtual Dock app |
-| `THUMBS_UP` | **Confirm System Ready** |
-| `UNKNOWN` | **Re-arm Controller** for next gesture command |
-
----
-
-## 📄 License
-This project is open source and intended for educational, research, and productivity automation use.

@@ -44,6 +44,34 @@ class WindowsCommandExecutor:
 
         return shutil.which("code")
 
+    def find_chrome(self):
+        """Find the Google Chrome executable without invoking a shell."""
+        candidates = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+            / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Google/Chrome/Application/chrome.exe",
+        ]
+        for path in candidates:
+            if path.is_file():
+                return str(path)
+        return shutil.which("chrome.exe") or shutil.which("chrome")
+
+    def find_edge(self):
+        """Find Microsoft Edge's executable."""
+        candidates = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Microsoft/Edge/Application/msedge.exe",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+            / "Microsoft/Edge/Application/msedge.exe",
+        ]
+        for path in candidates:
+            if path.is_file():
+                return str(path)
+        return shutil.which("msedge.exe") or shutil.which("msedge")
+
     def _launch_system_app(self, executable, command_name):
         """Launch a standard Windows executable via subprocess."""
         subprocess.Popen([executable])
@@ -64,6 +92,13 @@ class WindowsCommandExecutor:
 
         return self._launch_system_app(vscode_path, "OPEN_VSCODE")
 
+    def open_chrome(self):
+        """Launch Google Chrome when installed."""
+        executable = self.find_chrome()
+        if not executable:
+            return "CHROME_NOT_FOUND"
+        return self._launch_system_app(executable, "OPEN_CHROME")
+
     def open_explorer(self):
         """Launch Windows File Explorer."""
         return self._launch_system_app("explorer.exe", "OPEN_EXPLORER")
@@ -76,6 +111,18 @@ class WindowsCommandExecutor:
         """Launch Windows Notepad."""
         return self._launch_system_app("notepad.exe", "OPEN_NOTEPAD")
 
+    def open_edge(self):
+        """Launch Microsoft Edge when installed."""
+        executable = self.find_edge()
+        if not executable:
+            return "EDGE_NOT_FOUND"
+        return self._launch_system_app(executable, "OPEN_EDGE")
+
+    def open_settings(self):
+        """Open the Windows Settings URI through the registered shell handler."""
+        os.startfile("ms-settings:")
+        return "OPEN_SETTINGS executed"
+
 
 if __name__ == "__main__":
     import sys
@@ -84,8 +131,11 @@ if __name__ == "__main__":
 
     cli_actions = {
         "minimize": executor.minimize_all,
+        "chrome": executor.open_chrome,
         "vscode": executor.open_vscode,
         "explorer": executor.open_explorer,
+        "edge": executor.open_edge,
+        "settings": executor.open_settings,
         "calculator": executor.open_calculator,
         "notepad": executor.open_notepad,
     }

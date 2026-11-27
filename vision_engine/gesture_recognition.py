@@ -10,10 +10,14 @@ class GestureRecognition:
 
     def recognize(self, hand_landmarks):
         if hand_landmarks is None or len(hand_landmarks) != 21:
+            self.classifier.reset()
             return {
                 "gesture": "UNKNOWN",
                 "confidence": 0.0,
                 "extended_fingers": 0,
+                "finger_states": {},
+                "finger_angles": {},
+                "finger_geometry": {},
                 "pinch_ratio": 1.0,
                 "palm_scale": 0.0,
                 "pinch_distance": 0.0,

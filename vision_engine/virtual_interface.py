@@ -71,7 +71,7 @@ def _draw_translucent_rect(frame, pt1, pt2, color, alpha=0.55):
 
 
 class VirtualAppDock:
-    """Interactive air-touch virtual dock supporting dwell and instant pinch clicks."""
+    """Legacy in-frame dock utility supporting pointing dwell only."""
 
     def __init__(
         self,
@@ -87,7 +87,6 @@ class VirtualAppDock:
         self.hover_started_at = None
         self.progress = 0.0
         self._fired_current_hover = False
-        self._pinch_consumed = False
         self.last_triggered_at = -1e9
         self.last_triggered_id = None
 
@@ -132,7 +131,6 @@ class VirtualAppDock:
         self.hover_started_at = None
         self.progress = 0.0
         self._fired_current_hover = False
-        self._pinch_consumed = False
 
     def _empty_result(self, label=None, cooling_down=False):
         return {
@@ -146,14 +144,11 @@ class VirtualAppDock:
         }
 
     def update(self, pointer_xy, is_pointing, frame_width, is_pinching=False, now=None):
-        """Update hover dwell / instant pinch state and return trigger metadata."""
+        """Update pointing hover dwell; PINCH is intentionally ignored."""
         now = time.monotonic() if now is None else now
         rects = self.compute_button_rects(frame_width)
 
-        if not is_pinching:
-            self._pinch_consumed = False
-
-        if pointer_xy is None or (not is_pointing and not is_pinching):
+        if pointer_xy is None or not is_pointing or is_pinching:
             self._reset_hover()
             return self._empty_result()
 
@@ -169,22 +164,6 @@ class VirtualAppDock:
             self.hover_started_at = now
             self.progress = 0.0
             self._fired_current_hover = False
-
-        if is_pinching and not self._pinch_consumed and not in_cooldown:
-            self.progress = 1.0
-            self._fired_current_hover = True
-            self._pinch_consumed = True
-            self.last_triggered_at = now
-            self.last_triggered_id = target.button_id
-            return {
-                "hovered_id": target.button_id,
-                "progress": 1.0,
-                "triggered": True,
-                "trigger_mode": "PINCH",
-                "command": target.command,
-                "label": target.label,
-                "cooling_down": False,
-            }
 
         if in_cooldown or self._fired_current_hover:
             return self._empty_result(label=target.label, cooling_down=in_cooldown)
@@ -227,7 +206,7 @@ class VirtualAppDock:
         _draw_translucent_rect(frame, (12, 8), (width - 12, 110), (18, 22, 30), alpha=0.68)
         cv2.putText(
             frame,
-            "AIRTOUCH VIRTUAL APP DOCK  |  Point (1.0s) or PINCH to launch instantly",
+            "AIRTOUCH VIRTUAL APP DOCK  |  Point steadily to launch",
             (22, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -322,7 +301,7 @@ class VirtualAppDock:
         _draw_translucent_rect(frame, (12, guide_y1), (width - 12, height - 10), (18, 22, 30), alpha=0.68)
         cv2.putText(
             frame,
-            "OPEN_PALM -> FIST: Minimize Desktop  |  PEACE: VS Code  |  POINTING / PINCH: Virtual Dock  |  THUMBS_UP: Confirm  |  Q/ESC: Exit",
+            "OPEN_PALM: Show Dock  |  FIST: Hide Dock  |  POINTING: Hover to launch  |  Q/ESC: Exit",
             (20, height - 20),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.46,
@@ -334,10 +313,7 @@ class VirtualAppDock:
         # 5. Virtual Air Cursor at smoothed index fingertip
         if pointer_xy is not None:
             px, py = int(pointer_xy[0]), int(pointer_xy[1])
-            if is_pinching:
-                cv2.circle(frame, (px, py), 13, (0, 255, 120), 3, cv2.LINE_AA)
-                cv2.circle(frame, (px, py), 6, (255, 255, 255), -1, cv2.LINE_AA)
-            elif is_pointing:
+            if is_pointing and not is_pinching:
                 cv2.circle(frame, (px, py), 10, (0, 255, 255), 2, cv2.LINE_AA)
                 cv2.circle(frame, (px, py), 4, (0, 255, 180), -1, cv2.LINE_AA)
                 if self.progress > 0.0:

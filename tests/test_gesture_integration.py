@@ -1,25 +1,26 @@
-﻿from vision_engine.gesture_command_controller import GestureCommandController
+import unittest
 
-controller = GestureCommandController()
+from vision_engine.gesture_command_controller import GestureCommandController
 
-controller.process('OPEN_PALM')
-result = controller.process('FIST')
-assert result['command'] == 'MINIMIZE_ALL', result
-assert result['executed'], result
 
-result = controller.process('FIST')
-assert not result['executed'], result
+class TestGestureIntegration(unittest.TestCase):
+    def test_overlay_gesture_mapping_and_no_direct_gesture_launch(self):
+        controller = GestureCommandController()
 
-controller.process('UNKNOWN')
-result = controller.process('PEACE')
-assert result['command'] == 'OPEN_VSCODE', result
-assert result['executed'], result
+        show = controller.process("OPEN_PALM", now=1.0)
+        self.assertEqual(show["command"], "SHOW_OVERLAY")
+        self.assertTrue(show["executed"])
 
-result = controller.process('PEACE')
-assert not result['executed'], result
+        hide = controller.process("FIST", now=1.1)
+        self.assertEqual(hide["command"], "HIDE_OVERLAY")
+        self.assertTrue(hide["executed"])
+        self.assertNotIn("MINIMIZE_ALL", hide.values())
 
-print('INTEGRATION TEST: PASS')
-print('MINIMIZE_ALL: PASS')
-print('OPEN_VSCODE: PASS')
-print('ONE-SHOT EXECUTION: PASS')
-print('NEUTRAL RE-ARM: PASS')
+        for gesture in ("PEACE", "PINCH", "THUMBS_UP"):
+            action = controller.process(gesture, now=1.5)
+            self.assertIsNone(action["command"])
+            self.assertFalse(action["executed"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -4,6 +4,8 @@
 **Audit Baseline Commit:** `6e18f4c` (`main` branch)  
 **Benchmark Logs:** `results/benchmark/benchmark_sessions.csv`
 
+> Historical note: the measurements below describe earlier implementations. The current runtime uses a calibrated PINCH or stable tile click to select an app; 500 ms hover is used to mark the APP_HOVER/dwell-ready state and does not launch by itself. See [LIVE_CAMERA_VALIDATION.md](LIVE_CAMERA_VALIDATION.md) for current interaction checks.
+
 ---
 
 ## 1. Verified Results vs Unverified Assumptions
@@ -56,4 +58,4 @@
 
 1. **Reduce Camera Capture Latency (Target `< 33 ms` capture):** Benchmark `cv2.VideoWriter_fourcc(*'MJPG')` or `640x480` capture in `CAP_DSHOW` on the physical webcam to lift end-to-end FPS from `~8.4 FPS` toward `25–30 FPS`.
 2. **Empirical Pinch Threshold Calibration:** Run `tools/live_camera_diagnostic.py`, record 10+ Open (`[O]`) and 10+ Pinch (`[P]`) samples with `[C]`, and persist real-hand thresholds.
-3. **True Desktop Overlay (Phase 2 Architecture):** Replace in-frame OpenCV dock rendering with a transparent topmost Windows overlay so controls remain accessible while VS Code / Explorer / Calculator are focused.
+3. **Native Desktop Overlay (Implemented):** The transparent topmost Win32 dock is separate from the OpenCV preview and remains visible while other apps are focused. Live camera and hover-to-launch validation is still required on the target desktop.

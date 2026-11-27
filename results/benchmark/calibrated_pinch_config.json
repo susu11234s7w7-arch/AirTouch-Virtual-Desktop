@@ -1,0 +1,8 @@
+{
+  "enter_ratio": 0.177,
+  "exit_ratio": 0.757,
+  "cooldown_seconds": 1.8,
+  "min_confirm_frames": 2,
+  "min_index_reach_ratio": 1.15,
+  "source": "empirical_58open_50pinch"
+}

@@ -125,12 +125,6 @@ def compute_summary_metrics(
         else None
     )
 
-    pinch_rate_pct = (
-        round((pinch_dock_successes / pinch_attempts) * 100.0, 2)
-        if pinch_attempts > 0
-        else None
-    )
-
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "mode": mode,
@@ -149,9 +143,11 @@ def compute_summary_metrics(
         "hand_tracking_loss_rate_pct": round(loss_rate_pct, 2),
         "avg_gesture_transition_latency_ms": avg_transition_ms if avg_transition_ms is not None else "N/A",
         "false_activation_count": pinch_calibrator.false_activations,
-        "successful_pinch_selection_rate_pct": pinch_rate_pct if pinch_rate_pct is not None else "N/A",
+        # Keep the old CSV column for compatibility with existing benchmark
+        # logs, while making clear that PINCH no longer selects applications.
+        "successful_pinch_selection_rate_pct": "Disabled",
         "pinch_attempts": pinch_attempts,
-        "pinch_successes": pinch_dock_successes,
+        "pinch_successes": 0,
         "enter_ratio": pinch_calibrator.config.enter_ratio,
         "exit_ratio": pinch_calibrator.config.exit_ratio,
     }
@@ -333,7 +329,7 @@ def run_benchmark(
             pinch_eval = pinch_calibrator.update(
                 cal_landmarks,
                 now=t2,
-                can_click=True,
+                can_click=False,
                 other_fingers_open=other_open,
             )
             if not prev_pinch and pinch_eval["is_pinching"]:
@@ -351,9 +347,6 @@ def run_benchmark(
                 is_pinching=is_pinching,
                 now=t3,
             )
-            if dock_res["triggered"] and dock_res["trigger_mode"] == "PINCH":
-                pinch_dock_successes += 1
-
             virtual_dock.draw(
                 annotated,
                 pointer_xy=pointer_xy,

@@ -25,9 +25,13 @@ from vision_engine.gesture_command_controller import GestureCommandController
 from vision_engine.gesture_recognition import GestureRecognition
 from vision_engine.hand_tracker import HandTracker
 from vision_engine.pinch_calibrator import PinchCalibrationConfig, PinchCalibrator
+from vision_engine.desktop_overlay import (
+    BackgroundCommandLauncher,
+    DesktopOverlayController,
+    WindowsDesktopOverlay,
+)
 from vision_engine.virtual_interface import (
     CursorSmoother,
-    VirtualAppDock,
     _draw_translucent_rect,
 )
 from windows_command_executor import WindowsCommandExecutor
@@ -77,20 +81,22 @@ class DiagnosticPipeline:
         stabilizer,
         controller,
         cursor_smoother,
-        virtual_dock,
         pinch_calibrator,
         executor=None,
         execute_os_commands=True,
+        desktop_overlay_controller=None,
+        command_launcher=None,
     ):
         self.tracker = tracker
         self.recognizer = recognizer
         self.stabilizer = stabilizer
         self.controller = controller
         self.cursor_smoother = cursor_smoother
-        self.virtual_dock = virtual_dock
         self.pinch_calibrator = pinch_calibrator
         self.executor = executor
         self.execute_os_commands = execute_os_commands
+        self.desktop_overlay_controller = desktop_overlay_controller
+        self.command_launcher = command_launcher
 
         self.event_log = DiagnosticEventLog()
         self.start_time = time.perf_counter()
@@ -100,6 +106,9 @@ class DiagnosticPipeline:
         self.last_raw_gesture = None
         self.last_stable_gesture = None
         self.last_tracking_status = None
+        self.last_overlay_state = None
+        self.last_cursor_signature = None
+        self.last_geometry_log_at = None
         self.last_pinch_state = None
         self.last_controller_gesture = None
 
@@ -131,6 +140,9 @@ class DiagnosticPipeline:
 
         annotated, result = self.tracker.process(frame, timestamp_ms)
         hands_count = len(result.hand_landmarks) if result.hand_landmarks else 0
+        primary_landmark_count = (
+            len(result.hand_landmarks[0]) if hands_count > 0 else 0
+        )
         tracking_status = "TRACKED" if hands_count > 0 else "LOST"
         handedness = (
             self.tracker.extract_handedness(result, 0)
@@ -138,11 +150,15 @@ class DiagnosticPipeline:
             else "N/A"
         )
 
-        if tracking_status != self.last_tracking_status:
-            self.event_log.record("TRACKING", tracking_status, now=frame_start)
-            self.last_tracking_status = tracking_status
+        tracking_detail = (
+            f"{tracking_status} hands={hands_count} "
+            f"primary_landmarks={primary_landmark_count}"
+        )
+        if tracking_detail != self.last_tracking_status:
+            self.event_log.record("TRACKING", tracking_detail, now=frame_start)
+            self.last_tracking_status = tracking_detail
 
-        raw_pointer_xy = None
+        raw_pointer_norm = None
         primary_hand = None
         if hands_count > 0:
             primary_hand = result.hand_landmarks[0]
@@ -151,15 +167,33 @@ class DiagnosticPipeline:
             raw_gesture = recognition["gesture"]
             confidence = recognition["confidence"]
             finger_states = recognition.get("finger_states", {})
+            finger_geometry = recognition.get("finger_geometry", {})
             other_open = any(
                 finger_states.get(k, False) for k in ("middle", "ring", "pinky")
             )
 
+            if (
+                finger_geometry
+                and (
+                    self.last_geometry_log_at is None
+                    or frame_start - self.last_geometry_log_at >= 0.3
+                )
+            ):
+                geometry_detail = "; ".join(
+                    f"{name}:pip={m['pip_angle']:.0f},dip={m['dip_angle']:.0f},"
+                    f"straight={m['straightness']:.2f},reach={m['normalized_reach']:.2f},"
+                    f"score={m['extension_score']:.2f}"
+                    for name, m in finger_geometry.items()
+                )
+                self.event_log.record(
+                    "HAND_GEOMETRY",
+                    f"raw={raw_gesture}; states={finger_states}; {geometry_detail}",
+                    now=frame_start,
+                )
+                self.last_geometry_log_at = frame_start
+
             index_tip = primary_hand[8]
-            raw_pointer_xy = (
-                int(index_tip.x * frame.shape[1]),
-                int(index_tip.y * frame.shape[0]),
-            )
+            raw_pointer_norm = (float(index_tip.x), float(index_tip.y))
         else:
             self.last_landmarks = None
             recognition = self.recognizer.recognize(None)
@@ -175,7 +209,6 @@ class DiagnosticPipeline:
             )
             self.last_raw_gesture = raw_gesture
 
-        pointer_xy = self.cursor_smoother.update(raw_pointer_xy)
         stabilization = self.stabilizer.update(raw_gesture, frame_start)
         stable_gesture = stabilization["stable_gesture"]
 
@@ -187,6 +220,7 @@ class DiagnosticPipeline:
             )
             self.last_stable_gesture = stable_gesture
 
+        gesture_command = None
         if (
             stabilization["changed"]
             and stable_gesture != self.last_controller_gesture
@@ -194,20 +228,44 @@ class DiagnosticPipeline:
             cmd_res = self.controller.process(stable_gesture, now=frame_start)
             self.last_controller_gesture = stable_gesture
             self.controller_message = cmd_res["message"]
-            if cmd_res["executed"] and cmd_res["command"] is not None:
-                self.last_command_message = self._run_command(
-                    cmd_res["command"], "GESTURE"
+            additional_commands = cmd_res.get("additional_commands", ())
+            mapping = (
+                f"{stable_gesture} -> {cmd_res['command'] or 'NO_COMMAND'}"
+                + (
+                    f" + {' + '.join(additional_commands)}"
+                    if additional_commands
+                    else ""
                 )
-                self.virtual_dock.show_toast(
-                    f"[GESTURE] {self.last_command_message}",
-                    color=(0, 220, 255),
+                + f" (executed={cmd_res['executed']}; {cmd_res['message']})"
+            )
+            self.event_log.record(
+                "GESTURE_MAPPING",
+                mapping,
+                now=frame_start,
+            )
+            if cmd_res["executed"] and cmd_res["command"] is not None:
+                gesture_command = cmd_res["command"]
+                if gesture_command not in ("SHOW_OVERLAY", "HIDE_OVERLAY"):
+                    self.last_command_message = (
+                        self.command_launcher(gesture_command)
+                        if self.command_launcher is not None
+                        else self._run_command(gesture_command, "GESTURE")
+                    )
+            for additional_command in additional_commands:
+                self.event_log.record(
+                    "SYSTEM_COMMAND_REQUESTED",
+                    f"{stable_gesture} -> {additional_command}",
                     now=frame_start,
                 )
+                if self.command_launcher is not None:
+                    self.command_launcher(additional_command)
+                else:
+                    self._run_command(additional_command, "GESTURE")
 
         pinch_eval = self.pinch_calibrator.update(
             primary_hand,
             now=frame_start,
-            can_click=True,
+            can_click=False,
             other_fingers_open=other_open,
         )
         if pinch_eval["state"] != self.last_pinch_state:
@@ -218,31 +276,55 @@ class DiagnosticPipeline:
             )
             self.last_pinch_state = pinch_eval["state"]
 
-        is_pointing = stable_gesture == "POINTING"
-        is_pinching = pinch_eval["is_pinching"] or stable_gesture == "PINCH"
-
-        dock_res = self.virtual_dock.update(
-            pointer_xy=pointer_xy,
-            is_pointing=is_pointing,
-            frame_width=annotated.shape[1],
-            is_pinching=is_pinching,
-            now=frame_start,
-        )
-
-        if dock_res["triggered"] and dock_res["command"]:
-            cmd = dock_res["command"]
-            mode = dock_res["trigger_mode"] or "DOCK"
-            if cmd == "EXIT_APP":
-                self.last_command_message = "Exit requested from Virtual Dock"
-                self.event_log.record("COMMAND_EXIT", self.last_command_message, now=frame_start)
-                self.stop_requested = True
-            else:
-                self.last_command_message = self._run_command(cmd, f"DOCK_{mode}")
-                self.virtual_dock.show_toast(
-                    f"[{mode}] {dock_res['label']} launched",
-                    color=(0, 235, 160),
+        if self.desktop_overlay_controller is not None:
+            # A changing raw gesture cancels dwell before the stabilizer has
+            # accepted a new state, preventing launches during transitions.
+            frame_gesture = (
+                stable_gesture if raw_gesture == stable_gesture else "UNKNOWN"
+            )
+            overlay_result = self.desktop_overlay_controller.process_frame(
+                gesture=frame_gesture,
+                pointer_xy=raw_pointer_norm,
+                tracking_available=hands_count > 0,
+                command=gesture_command,
+                now=frame_start,
+            )
+            overlay_state = self.desktop_overlay_controller.state.value
+            if overlay_state != self.last_overlay_state:
+                self.event_log.record(
+                    "OVERLAY_CONTROLLER_STATE",
+                    f"{self.last_overlay_state or 'UNINITIALIZED'} -> {overlay_state}",
                     now=frame_start,
                 )
+                self.last_overlay_state = overlay_state
+            cursor_xy = self.desktop_overlay_controller.cursor_xy
+            hovered_id = self.desktop_overlay_controller.hovered_id
+            cursor_signature = (cursor_xy is not None, hovered_id)
+            if cursor_signature != self.last_cursor_signature:
+                self.event_log.record(
+                    "AIR_CURSOR_HOVER",
+                    f"active={cursor_xy is not None} cursor={cursor_xy} hovered={hovered_id}",
+                    now=frame_start,
+                )
+                self.last_cursor_signature = cursor_signature
+            if overlay_result.get("selected"):
+                selected_command = overlay_result.get("command")
+                if selected_command == "EXIT_APP":
+                    self.last_command_message = "Exit requested from native desktop overlay"
+                    self.event_log.record("COMMAND_EXIT", self.last_command_message, now=frame_start)
+                    self.stop_requested = True
+                else:
+                    self.last_command_message = str(
+                        overlay_result.get("result", "Selection complete")
+                    )
+                    self.event_log.record(
+                        "COMMAND_SELECTED",
+                        f"{selected_command}: {self.last_command_message}",
+                        now=frame_start,
+                    )
+            self.stop_requested = self.stop_requested or overlay_result.get(
+                "stop_requested", False
+            )
 
         self.frame_count += 1
         elapsed_total = frame_start - self.start_time
@@ -252,15 +334,6 @@ class DiagnosticPipeline:
         frame_proc_ms = (time.perf_counter() - frame_start) * 1000.0
         if self.fps == 0.0 and frame_proc_ms > 0:
             self.fps = min(60.0, 1000.0 / frame_proc_ms)
-
-        self.virtual_dock.draw(
-            annotated,
-            pointer_xy=pointer_xy,
-            is_pointing=is_pointing,
-            is_pinching=is_pinching,
-            hud_info=None,
-            now=frame_start,
-        )
 
         telemetry = {
             "fps": round(self.fps, 1),
@@ -274,7 +347,11 @@ class DiagnosticPipeline:
             "hysteresis_band": pinch_eval["hysteresis_band"],
             "tracking_status": tracking_status,
             "handedness": handedness,
-            "cursor_xy": pointer_xy,
+            "cursor_xy": (
+                self.desktop_overlay_controller.cursor_xy
+                if self.desktop_overlay_controller is not None
+                else None
+            ),
             "last_command": self.last_command_message,
             "frame_time_ms": round(frame_proc_ms, 2),
             "stability_text": (
@@ -379,6 +456,9 @@ def run_diagnostic(
     tracker = None
     camera = None
     pipeline = None
+    overlay = None
+    overlay_controller = None
+    launch_worker = None
 
     try:
         tracker = HandTracker(model_path=MODEL_PATH)
@@ -386,9 +466,22 @@ def run_diagnostic(
         stabilizer = GestureStabilizer(GESTURE_STABILIZATION)
         controller = GestureCommandController(sequence_timeout=SEQUENCE_TIMEOUT)
         cursor_smoother = CursorSmoother(alpha=0.38, deadzone_px=1.5)
-        virtual_dock = VirtualAppDock(dwell_seconds=1.0, cooldown_seconds=1.8)
         pinch_calibrator = PinchCalibrator(config=pinch_cfg)
         executor = WindowsCommandExecutor() if execute_os_commands else None
+        overlay = WindowsDesktopOverlay().start()
+
+        def execute_diagnostic_command(command):
+            if pipeline is None:
+                return "Overlay command ignored before diagnostic startup"
+            return pipeline._run_command(command, "BACKGROUND")
+
+        launch_worker = BackgroundCommandLauncher(execute_diagnostic_command)
+
+        overlay_controller = DesktopOverlayController(
+            overlay=overlay,
+            launch_command=launch_worker.submit,
+            screen_size=overlay.screen_size,
+        )
 
         pipeline = DiagnosticPipeline(
             tracker=tracker,
@@ -396,10 +489,11 @@ def run_diagnostic(
             stabilizer=stabilizer,
             controller=controller,
             cursor_smoother=cursor_smoother,
-            virtual_dock=virtual_dock,
             pinch_calibrator=pinch_calibrator,
             executor=executor,
             execute_os_commands=execute_os_commands,
+            desktop_overlay_controller=overlay_controller,
+            command_launcher=launch_worker.submit,
         )
 
         camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
@@ -415,6 +509,10 @@ def run_diagnostic(
         pipeline.event_log.record(
             "SESSION_START",
             f"camera={camera_index} res={actual_w}x{actual_h} pinch={pinch_cfg.to_dict()}",
+        )
+        pipeline.event_log.record(
+            "CAMERA_INITIALIZED",
+            f"opened={camera.isOpened()} index={camera_index} resolution={actual_w}x{actual_h}",
         )
 
         start = time.perf_counter()
@@ -455,6 +553,12 @@ def run_diagnostic(
                 break
 
     finally:
+        if overlay_controller is not None:
+            overlay_controller.shutdown()
+        elif overlay is not None:
+            overlay.close()
+        if launch_worker is not None:
+            launch_worker.close()
         if camera is not None:
             camera.release()
         if tracker is not None:
