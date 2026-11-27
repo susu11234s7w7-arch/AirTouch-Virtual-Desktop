@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QIcon,
     QPainter,
     QPen,
+    QPolygon,
     QPixmap,
     QRegion,
 )
@@ -86,8 +87,7 @@ class FloatingLauncherWindow(QWidget):
         self.exit_rect = QRect(max(12, self.screen_width - 112), 22, 96, 36)
         self.hovered_tile = None
         self.dwell_ready = False
-        self.cursor_local = None
-        self.status = "Point, then pinch or click to open"
+        self.status = "Point at an app, then pinch to click"
         self._icons = self._load_native_icons()
         self._build_window_region()
 
@@ -145,15 +145,7 @@ class FloatingLauncherWindow(QWidget):
             self.hide()
             self._hiding = False
 
-    def set_air_state(self, cursor_xy, hovered_tile, dwell_ready=False):
-        self.cursor_local = (
-            QPoint(
-                int(cursor_xy[0] - self.screen_geometry.x()),
-                int(cursor_xy[1] - self.screen_geometry.y()),
-            )
-            if cursor_xy is not None
-            else None
-        )
+    def set_air_state(self, hovered_tile, dwell_ready=False):
         self.hovered_tile = hovered_tile
         self.dwell_ready = bool(dwell_ready)
         self.update()
@@ -222,13 +214,6 @@ class FloatingLauncherWindow(QWidget):
         painter.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         painter.drawText(self.exit_rect, Qt.AlignmentFlag.AlignCenter, "×  Exit UI")
 
-        if self.cursor_local is not None:
-            center = self.cursor_local
-            painter.setBrush(QColor(65, 220, 255, 65))
-            painter.setPen(QPen(QColor(220, 252, 255, 245), 2))
-            painter.drawEllipse(center, 15, 15)
-            painter.drawLine(center.x() - 22, center.y(), center.x() + 22, center.y())
-            painter.drawLine(center.x(), center.y() - 22, center.x(), center.y() + 22)
         painter.end()
 
     def mousePressEvent(self, event):
@@ -244,6 +229,73 @@ class FloatingLauncherWindow(QWidget):
                 self.appSelected.emit(tile_id)
                 return
         super().mousePressEvent(event)
+
+
+class AirCursorWindow(QWidget):
+    """Full-screen visual cursor that never intercepts desktop mouse input."""
+
+    def __init__(self, screen_geometry, parent=None):
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        super().__init__(parent, flags)
+        self.screen_geometry = screen_geometry
+        self.setGeometry(screen_geometry)
+        self.setWindowTitle("AirTouch Air Cursor")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.cursor_local = None
+        self.hide()
+
+    def set_cursor_position(self, cursor_xy):
+        if cursor_xy is None:
+            self.hide_cursor()
+            return
+        self.cursor_local = QPoint(
+            int(cursor_xy[0] - self.screen_geometry.x()),
+            int(cursor_xy[1] - self.screen_geometry.y()),
+        )
+        if not self.isVisible():
+            self.show()
+            self.raise_()
+        self.update()
+
+    def hide_cursor(self):
+        self.cursor_local = None
+        self.hide()
+
+    def paintEvent(self, _event):
+        if self.cursor_local is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        center = self.cursor_local
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 207, 0, 62))
+        painter.drawEllipse(center, 29, 29)
+        painter.setBrush(QColor(255, 226, 92, 52))
+        painter.drawEllipse(center, 21, 21)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        arrow = QPolygon(
+            [
+                center,
+                center + QPoint(5, 30),
+                center + QPoint(12, 23),
+                center + QPoint(19, 35),
+                center + QPoint(24, 32),
+                center + QPoint(17, 20),
+                center + QPoint(28, 18),
+            ]
+        )
+        painter.setPen(QPen(QColor(74, 55, 0, 250), 2))
+        painter.setBrush(QColor(255, 214, 0, 255))
+        painter.drawPolygon(arrow)
+        painter.end()
 
 
 class CameraPreviewWindow(QMainWindow):

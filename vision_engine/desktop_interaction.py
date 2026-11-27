@@ -72,7 +72,7 @@ def map_normalized_to_screen(x, y, screen_width, screen_height, mirrored=True):
 
 
 class DesktopInteractionStateMachine:
-    """Coordinate gestures, hover dwell, calibrated pinch, and app one-shots."""
+    """Coordinate gestures, pointer hover feedback, and click-to-launch."""
 
     def __init__(
         self,
@@ -88,7 +88,7 @@ class DesktopInteractionStateMachine:
         self.apps = {app.tile_id: app for app in apps}
         self.tile_rects = compute_arc_tile_rects(self.screen_width, self.screen_height)
         self.cursor_smoother = cursor_smoother or CursorSmoother(
-            alpha=0.38, deadzone_px=2.0
+            alpha=0.82, deadzone_px=0.8
         )
         self.mode = InteractionMode.MONITORING
         self.cursor_xy = None
@@ -96,7 +96,6 @@ class DesktopInteractionStateMachine:
         self.hover_started_at = None
         self.dwell_ready = False
         self.last_launch_at = -1e9
-        self.selection_latched = False
         self.selected_app = None
 
     @property
@@ -122,20 +121,27 @@ class DesktopInteractionStateMachine:
                 return tile_id
         return None
 
-    def _update_pointer(self, pointer_norm, now):
+    def _update_pointer(self, pointer_norm, now, track_hover=True):
         if pointer_norm is None:
             self._clear_pointer()
-            self.mode = InteractionMode.LAUNCHER_VISIBLE
-            return
+            if self.mode == InteractionMode.APP_HOVER:
+                self.mode = InteractionMode.LAUNCHER_VISIBLE
+            return [], None
         raw = map_normalized_to_screen(
             pointer_norm[0], pointer_norm[1], self.screen_width, self.screen_height
         )
         self.cursor_xy = self.cursor_smoother.update(raw)
+        if not track_hover:
+            self.hovered_app = None
+            self.hover_started_at = None
+            self.dwell_ready = False
+            return [], None
+
         target = self.hit_test(self.cursor_xy)
         if target != self.hovered_app:
             self.hovered_app = target
             self.hover_started_at = now if target else None
-            self.dwell_ready = False
+            self.dwell_ready = target is not None and self.dwell_seconds <= 0.0
         elif target is not None and self.hover_started_at is not None:
             self.dwell_ready = now - self.hover_started_at >= self.dwell_seconds
         self.mode = (
@@ -144,13 +150,15 @@ class DesktopInteractionStateMachine:
             else InteractionMode.LAUNCHER_VISIBLE
         )
 
+        # Hover only highlights a tile. Application launch is reserved for a
+        # deliberate physical mouse click or calibrated one-shot air click.
+        return [], None
+
     def process_frame(
         self,
         gesture,
         pointer_norm=None,
         tracking_available=True,
-        pinch_active=False,
-        pinch_triggered=False,
         now=None,
     ):
         """Process one stabilized camera result and return UI/action requests."""
@@ -162,14 +170,17 @@ class DesktopInteractionStateMachine:
         if self.mode == InteractionMode.CLOSING:
             return self._result(actions, selected)
 
-        if not pinch_active:
-            self.selection_latched = False
-
         if not tracking_available:
             self._clear_pointer()
             if self.mode == InteractionMode.APP_HOVER:
                 self.mode = InteractionMode.LAUNCHER_VISIBLE
-            # Keep the launcher state, but never act on stale coordinates.
+            return self._result(actions, selected)
+
+        if gesture == "BACK_OF_HAND":
+            self.close()
+            return self._result(["EXIT_APP"], selected)
+
+        if self.mode == InteractionMode.APP_LAUNCHING:
             return self._result(actions, selected)
 
         if gesture == "FIST":
@@ -182,24 +193,25 @@ class DesktopInteractionStateMachine:
         if gesture == "OPEN_PALM":
             if not self.launcher_visible:
                 actions.extend(("HIDE_PREVIEW", "SHOW_LAUNCHER"))
+                # OPEN_PALM begins a fresh, intentional launcher session; the
+                # previous app's cooldown must not delay the next selection.
+                self.last_launch_at = -1e9
             self.mode = InteractionMode.LAUNCHER_VISIBLE
             self._clear_pointer()
             return self._result(actions, selected)
 
         if gesture == "POINTING":
-            if self.launcher_visible:
-                self._update_pointer(pointer_norm, now)
+            if self.launcher_visible or self.mode == InteractionMode.DESKTOP_MODE:
+                actions, selected = self._update_pointer(
+                    pointer_norm,
+                    now,
+                    track_hover=self.launcher_visible,
+                )
             return self._result(actions, selected)
 
         if gesture == "PINCH":
-            if self.launcher_visible and pinch_triggered and not self.selection_latched:
-                self.selection_latched = True
-                can_launch = (
-                    self.hovered_app in self.apps
-                    and now - self.last_launch_at >= self.cooldown_seconds
-                )
-                if can_launch:
-                    actions, selected = self._begin_launch(self.hovered_app, now)
+            # The camera worker emits a separate calibrated one-shot click.
+            # Keep the last pointed coordinate so that click lands there.
             return self._result(actions, selected)
 
         # PEACE, UNKNOWN, and all unassigned gestures are safe no-ops.

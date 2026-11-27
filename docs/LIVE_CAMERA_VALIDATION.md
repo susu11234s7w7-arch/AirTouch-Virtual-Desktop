@@ -18,14 +18,15 @@ The initial Qt window is the mirrored camera preview. Camera capture and MediaPi
 1. Confirm the camera preview appears and `results/airtouch_sessions/session_*.csv` records `CAMERA_INITIALIZED`.
 2. Hold `FIST`. Confirm the preview and launcher hide, the state becomes `DESKTOP_MODE`, and later tracking events continue. Confirm there is no `MINIMIZE_ALL`/Win+D event.
 3. Hold `OPEN_PALM`. Confirm the camera preview stays hidden and the translucent topmost app arc appears over the desktop.
-4. Use POINTING to hover each of the five app cards. Confirm cursor smoothing, hover highlighting, and the `APP_HOVER` state. Hold a tile for 500 ms; it should only become dwell-ready and must not auto-launch.
-5. While hovering a tile, PINCH or click its card. Confirm one launch request, a real Windows app window, overlay hide, and continued camera tracking.
-6. Keep PINCH held and verify it does not launch twice. Release and re-enter a tile to verify another deliberate selection is accepted after cooldown.
-7. Verify PEACE, UNKNOWN, and tracking loss do not launch anything; on loss the cursor and hover clear.
-8. Use **Exit UI** or the system-tray menu to stop the camera worker and close the Qt windows.
-9. Test Chrome, VS Code, Explorer, Edge, and Settings on the Windows installation. A missing app must be reported as `NOT TESTED` rather than counted as success.
+4. Use POINTING and confirm the glowing yellow cursor is visible both on and outside the app cards. Verify the native pointer follows it and each card highlights without launching.
+5. Hold PINCH over one card. Confirm one native left click selects that app. Keep pinching and verify there is no repeated click until the calibrated pinch is released and deliberately repeated.
+6. After an app opens, point at a normal window control such as its close button and pinch once. Confirm the control receives the click.
+7. Verify PEACE, UNKNOWN, and tracking loss never issue clicks; on loss the cursor hides and stale coordinates cannot be clicked.
+8. Turn the hand from the initial palm-facing pose to show its back and hold. Confirm AirTouch exits only after the orientation change is stable and releases the camera.
+9. Use **Exit UI** or the system-tray menu as explicit shutdown fallbacks.
+10. Test Chrome, VS Code, Explorer, Edge, and Settings on the Windows installation. A missing app must be reported as `NOT TESTED` rather than counted as success.
 
-The saved empirical PINCH calibration file is loaded by the camera worker and is not changed at runtime. The legacy calibration utility remains available.
+The saved empirical PINCH calibration file is loaded by the camera worker and is not changed at runtime. Its one-shot signal gates the left click. The legacy calibration utility remains available.
 
 ## Diagnostic mode
 

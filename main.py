@@ -18,12 +18,14 @@ from PySide6.QtWidgets import (
 )
 
 from vision_engine.camera_worker import CameraWorker
+from vision_engine.air_mouse import left_click, move_system_cursor
 from vision_engine.desktop_interaction import (
     DesktopInteractionStateMachine,
     InteractionMode,
 )
 from vision_engine.gesture_stabilizer import GESTURE_STABILIZATION, GestureStabilizer
 from vision_engine.qt_floating_launcher import (
+    AirCursorWindow,
     CameraPreviewWindow,
     FloatingLauncherWindow,
 )
@@ -132,6 +134,7 @@ class AirTouchController(QObject):
         )
         self.preview = CameraPreviewWindow()
         self.launcher = FloatingLauncherWindow(screen_geometry)
+        self.air_cursor = AirCursorWindow(screen_geometry)
         self.preview.show()
         self.preview.raise_()
         self.preview.activateWindow()
@@ -220,8 +223,6 @@ class AirTouchController(QObject):
             stable,
             pointer_norm=frame["pointer_norm"],
             tracking_available=tracking,
-            pinch_active=frame["pinch_active"],
-            pinch_triggered=frame["pinch_triggered"],
         )
 
         if result["mode"] != self.last_mode.value:
@@ -229,36 +230,88 @@ class AirTouchController(QObject):
             self.last_mode = self.state_machine.mode
 
         if frame["pinch_triggered"]:
-            self.log.record(
-                "PINCH_CONFIRMED",
-                f"ratio={frame['pinch_ratio']}; hovered={result['hovered_app']}",
+            click_mode = self.state_machine.mode in (
+                InteractionMode.DESKTOP_MODE,
+                InteractionMode.LAUNCHER_VISIBLE,
+                InteractionMode.APP_HOVER,
             )
+            click_allowed = (
+                stable == "PINCH"
+                and tracking
+                and click_mode
+                and result["cursor_xy"] is not None
+            )
+            if click_allowed:
+                point = result["cursor_xy"]
+                move_system_cursor(
+                    point,
+                    screen_origin=(self.screen_geometry.x(), self.screen_geometry.y()),
+                )
+                sent = left_click()
+                self.log.record(
+                    "AIR_MOUSE_CLICK",
+                    f"sent={sent}; x={point[0]}; y={point[1]}; "
+                    f"hovered={result['hovered_app']}; ratio={frame['pinch_ratio']}",
+                )
+            else:
+                self.log.record(
+                    "AIR_MOUSE_CLICK_BLOCKED",
+                    f"stable={stable}; tracking={tracking}; "
+                    f"mode={self.state_machine.mode.value}; "
+                    f"cursor={result['cursor_xy']}; ratio={frame['pinch_ratio']}",
+                )
 
         if result["hovered_app"] != self.last_hover:
             self.last_hover = result["hovered_app"]
             self.log.record("APP_HOVER", str(self.last_hover))
 
-        self.launcher.set_air_state(
-            result["cursor_xy"],
-            result["hovered_app"],
-            result["dwell_ready"],
-        )
-        if result["dwell_ready"]:
-            self.launcher.set_status(
-                f"{self.state_machine.apps[result['hovered_app']].label} — pinch or click to open"
+        self.launcher.set_air_state(result["hovered_app"], result["dwell_ready"])
+        cursor_active = (
+            stable in ("POINTING", "PINCH")
+            and tracking
+            and self.state_machine.mode in (
+                InteractionMode.DESKTOP_MODE,
+                InteractionMode.LAUNCHER_VISIBLE,
+                InteractionMode.APP_HOVER,
             )
+            and result["cursor_xy"] is not None
+        )
+        if cursor_active:
+            point = result["cursor_xy"]
+            screen_point = (
+                point[0] + self.screen_geometry.x(),
+                point[1] + self.screen_geometry.y(),
+            )
+            move_system_cursor(
+                point,
+                screen_origin=(self.screen_geometry.x(), self.screen_geometry.y()),
+            )
+            self.air_cursor.set_cursor_position(screen_point)
+        else:
+            self.air_cursor.hide_cursor()
+        if self.state_machine.mode == InteractionMode.APP_LAUNCHING:
+            app = self.state_machine.apps[self.state_machine.selected_app]
+            self.launcher.set_status(f"Opening {app.label}...")
+        elif result["dwell_ready"]:
+            label = self.state_machine.apps[result["hovered_app"]].label
+            self.launcher.set_status(f"{label} highlighted — pinch to click")
+        elif result["hovered_app"] is not None:
+            label = self.state_machine.apps[result["hovered_app"]].label
+            self.launcher.set_status(f"{label} — pinch to click")
         elif result["hovered_app"] is None:
-            self.launcher.set_status("Point, then pinch or click to open")
+            self.launcher.set_status("Point at an app, then pinch to click")
 
         self._apply_actions(result["actions"], result["selected_app"])
 
     def _apply_actions(self, actions, selected_app=None):
         for action in actions:
             if action == "SHOW_LAUNCHER":
-                self.launcher.set_status("Point, then pinch or click to open")
+                self.air_cursor.hide_cursor()
+                self.launcher.set_status("Point at an app, then pinch to click")
                 self.launcher.show_animated()
                 self.log.record("OVERLAY", "visible; topmost translucent Qt launcher")
             elif action == "HIDE_LAUNCHER":
+                self.air_cursor.hide_cursor()
                 self.launcher.hide_animated()
                 self.log.record("OVERLAY", "hidden")
             elif action == "HIDE_PREVIEW":
@@ -274,6 +327,8 @@ class AirTouchController(QObject):
                     f"{selected_app.tile_id} -> {selected_app.command}",
                 )
                 self.command_worker.launchRequested.emit(selected_app.command)
+            elif action == "EXIT_APP":
+                self.shutdown()
 
     @staticmethod
     def _focus_desktop_shell():
@@ -320,6 +375,7 @@ class AirTouchController(QObject):
         self.state_machine.close()
         self.log.record("SHUTDOWN", "Exit UI requested")
         self.tray.hide()
+        self.air_cursor.close()
         self.launcher.close()
         self.preview.hide()
         camera_stopped = True

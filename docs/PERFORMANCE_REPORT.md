@@ -4,7 +4,7 @@
 **Audit Baseline Commit:** `6e18f4c` (`main` branch)  
 **Benchmark Logs:** `results/benchmark/benchmark_sessions.csv`
 
-> Historical note: the measurements below describe earlier implementations. The current runtime uses a calibrated PINCH or stable tile click to select an app; 500 ms hover is used to mark the APP_HOVER/dwell-ready state and does not launch by itself. See [LIVE_CAMERA_VALIDATION.md](LIVE_CAMERA_VALIDATION.md) for current interaction checks.
+> Historical note: the measurements below describe earlier implementations. In the current runtime, POINTING moves the native cursor and hover only highlights; a calibrated PINCH sends one left click at the current position. See [LIVE_CAMERA_VALIDATION.md](LIVE_CAMERA_VALIDATION.md) for current interaction checks.
 
 ---
 

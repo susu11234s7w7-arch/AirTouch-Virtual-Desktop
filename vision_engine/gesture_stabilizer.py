@@ -8,6 +8,8 @@ GESTURE_STABILIZATION = {
     "POINTING": {"frames": 2, "seconds": 0.020},
     "PINCH": {"frames": 2, "seconds": 0.015},
     "THUMBS_UP": {"frames": 2, "seconds": 0.020},
+    # A hand flip is a destructive exit gesture, so require a longer hold.
+    "BACK_OF_HAND": {"frames": 5, "seconds": 0.300},
     "UNKNOWN": {"frames": 3, "seconds": 0.090},
 }
 

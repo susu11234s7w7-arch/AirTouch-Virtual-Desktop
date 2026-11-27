@@ -12,6 +12,7 @@ from vision_engine.gesture_recognition import GestureRecognition
 from vision_engine.hand_tracker import HandTracker
 from vision_engine.pinch_calibrator import PinchCalibrationConfig, PinchCalibrator
 from vision_engine.gesture_stabilizer import GESTURE_STABILIZATION, GestureStabilizer
+from vision_engine.hand_orientation import HandOrientationDetector
 
 
 class CameraWorker(QThread):
@@ -54,6 +55,7 @@ class CameraWorker(QThread):
             tracker = HandTracker(model_path=self.model_path)
             self.logEvent.emit("HAND_TRACKER", "MediaPipe VIDEO task ready")
             recognizer = GestureRecognition()
+            orientation_detector = HandOrientationDetector()
             stabilizer = GestureStabilizer(GESTURE_STABILIZATION)
             pinch_config = (
                 PinchCalibrationConfig.load(self.pinch_config_path)
@@ -105,6 +107,9 @@ class CameraWorker(QThread):
                     hand = hands[0]
                     recognition = recognizer.recognize(hand)
                     raw_gesture = recognition["gesture"]
+                    orientation_gesture = orientation_detector.update(
+                        hand, raw_gesture
+                    )
                     finger_states = recognition.get("finger_states", {})
                     other_open = any(
                         finger_states.get(name, False)
@@ -122,8 +127,15 @@ class CameraWorker(QThread):
 
                     # The saved empirical calibrator, not the classifier's
                     # fallback ratio, is authoritative for app selection.
-                    effective_raw = "PINCH" if pinch_active else raw_gesture
-                    if raw_gesture == "PINCH" and not pinch_active:
+                    if orientation_gesture == "BACK_OF_HAND":
+                        effective_raw = "BACK_OF_HAND"
+                    else:
+                        effective_raw = "PINCH" if pinch_active else raw_gesture
+                    if (
+                        orientation_gesture != "BACK_OF_HAND"
+                        and raw_gesture == "PINCH"
+                        and not pinch_active
+                    ):
                         effective_raw = "UNKNOWN"
 
                     if pinch_result["click_triggered"]:

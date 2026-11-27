@@ -9,6 +9,7 @@ from PySide6.QtTest import QTest
 
 from vision_engine.desktop_interaction import DEFAULT_APPS
 from vision_engine.qt_floating_launcher import (
+    AirCursorWindow,
     CameraPreviewWindow,
     FloatingLauncherWindow,
 )
@@ -57,6 +58,28 @@ class TestQtFloatingLauncher(unittest.TestCase):
         exit_point = self.window.exit_rect.center()
         QTest.mouseClick(self.window, Qt.MouseButton.LeftButton, pos=exit_point)
         self.assertEqual(exited, [True])
+
+    def test_air_cursor_is_visible_outside_tiles_and_click_through(self):
+        cursor = AirCursorWindow(QRect(0, 0, 1920, 1080))
+        flags = cursor.windowFlags()
+        self.assertTrue(flags & Qt.WindowType.FramelessWindowHint)
+        self.assertTrue(flags & Qt.WindowType.WindowStaysOnTopHint)
+        self.assertTrue(flags & Qt.WindowType.WindowTransparentForInput)
+        self.assertTrue(
+            cursor.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        )
+
+        cursor.set_cursor_position((80, 90))
+        self.app.processEvents()
+        self.assertTrue(cursor.isVisible())
+        self.assertEqual(cursor.cursor_local, QPoint(80, 90))
+        self.assertTrue(cursor.mask().isEmpty())
+
+        cursor.hide_cursor()
+        self.app.processEvents()
+        self.assertFalse(cursor.isVisible())
+        self.assertIsNone(cursor.cursor_local)
+        cursor.close()
 
     def test_closing_preview_hides_only_its_window(self):
         preview = CameraPreviewWindow()
